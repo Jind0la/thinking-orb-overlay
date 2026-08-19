@@ -3,7 +3,7 @@
  * State: busy -> working · idle -> breathing · manual override via popover.
  */
 import { jsx } from 'react/jsx-runtime'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useValue, host } from '@hermes/plugin-sdk'
 
 /* ================= engine (port of thinking-orbs) ================= */
@@ -489,27 +489,61 @@ function OrbCanvas({ size, stateRef }) {
 let _ctx = null
 let _seq = 0
 
-function deriveState(gateway, busy, awaiting) {
+// Live-Phasen aus Gateway-Events: macht searching/solving/composing/listening
+// automatisch erreichbar, nicht nur working/breathing. Events sind global
+// (nicht session-gefiltert) — für den Einzel-Chat-Betrieb präzise genug.
+const phaseState = { tools: 0, reasoning: false, streaming: false, waiting: false }
+
+function onGatewayEvent(e) {
+  const t = e && e.type
+  if (t === 'tool.start' || t === 'tool.generating') { phaseState.tools += 1; phaseState.waiting = false }
+  else if (t === 'tool.complete') phaseState.tools = Math.max(0, phaseState.tools - 1)
+  else if (t === 'reasoning.delta' || t === 'thinking.delta') { phaseState.reasoning = true; phaseState.waiting = false }
+  else if (t === 'message.delta' || t === 'message.interim') { phaseState.streaming = true; phaseState.reasoning = false }
+  else if (t === 'message.complete') { phaseState.streaming = false; phaseState.reasoning = false; phaseState.tools = 0 }
+  else if (t === 'clarify.request' || t === 'approval.request' || t === 'sudo.request' || t === 'secret.request') phaseState.waiting = true
+}
+
+function deriveState(gateway, busy, awaiting, phase) {
   const g = typeof gateway === 'string' && !['open', 'connected', 'online'].includes(gateway) ? 'connecting' : null
-  return g || (busy ? 'working' : awaiting ? 'listening' : 'breathing')
+  if (g) return g
+  if (!busy) {
+    if (phase.waiting || awaiting) return 'listening'
+    return 'breathing'
+  }
+  if (phase.streaming) return 'composing'
+  if (phase.reasoning) return 'solving'
+  if (phase.tools > 0) return 'searching'
+  if (awaiting) return 'listening'
+  return 'working'
 }
 
 function OrbChip() {
   const busy = useValue(host.state.busy)
   const awaiting = useValue(host.state.awaitingResponse)
   const gateway = useValue(host.state.gateway)
+  const [phaseTick, setPhaseTick] = useState(0)
   const stateRef = useRef('breathing')
+
+  // Gateway-Events abonnieren → Phasen-State aktualisieren (Re-Render via Tick)
+  useEffect(() => {
+    const dispose = host.onEvent('*', (e) => {
+      onGatewayEvent(e)
+      setPhaseTick(t => t + 1)
+    })
+    return () => dispose && dispose()
+  }, [])
 
   // Status an das Plugin-Backend melden (→ 127.0.0.1:8799 für die Orb-App).
   // Monotone seq verhindert Out-of-Order-Lügen (Backend übernimmt nur
   // seq >= letzte) — deterministischer als Abort bei unbekanntem signal-Support.
   useEffect(() => {
-    const state = deriveState(gateway, busy, awaiting)
+    const state = deriveState(gateway, busy, awaiting, phaseState)
     const seq = ++_seq
     _ctx?.rest('/report', { method: 'POST', body: { state, seq } }).catch(() => {})
-  }, [busy, awaiting, gateway])
+  }, [busy, awaiting, gateway, phaseTick])
 
-  stateRef.current = deriveState(gateway, busy, awaiting)
+  stateRef.current = deriveState(gateway, busy, awaiting, phaseState)
 
   return jsx('button', {
     style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 22, height: 22 },
