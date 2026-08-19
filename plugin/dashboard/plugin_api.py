@@ -44,15 +44,19 @@ _ALLOWED = {"working", "searching", "solving", "listening", "connecting",
 _ALLOWED_MOODS = {"calm", "joyful", "playful", "thoughtful", "shy",
                   "embarrassed", "annoyed", "aroused"}
 # Abklingzeiten in Sekunden — wie lange ein Mood ohne Auffrischen hält.
-# calm hat keinen Timeout (Grundzustand).
+# Prinzip (User-Korrektur 2026-08-19): Emotionen sind Momentaufnahmen,
+# keine Dauerzustände. Erröten hält keine 15 Minuten — die Zeiten bilden
+# die natürliche Lebensdauer ab. Mindest-Sichtbarkeit ~90s (Nimar muss
+# den Wechsel wahrnehmen können); alles Längere wird per Refresh genährt
+# (erneutes POST /mood frischt den Timer auf). calm hat keinen Timeout.
 _MOOD_TIMEOUTS = {
-    "shy": 480,          # 8 min — Verlegenheit klingt schnell ab
-    "embarrassed": 360,  # 6 min — noch schneller
-    "joyful": 720,       # 12 min
-    "playful": 600,      # 10 min
-    "thoughtful": 1200,  # 20 min — Grübeln dauert
-    "annoyed": 600,      # 10 min — soll nicht ewig gären
-    "aroused": 900,      # 15 min — darf bleiben, klingt aber auch ab
+    "embarrassed": 90,   # 90s — Erröten: Momentaufnahme, schnell vorbei
+    "shy": 120,          # 2 min — Kompliment-Nachwirkung
+    "annoyed": 120,      # 2 min — kurz gären, dann verziehen
+    "joyful": 180,       # 3 min — Freude über einen Erfolg
+    "playful": 180,      # 3 min — solange der Spaß läuft
+    "thoughtful": 300,   # 5 min — Grübeln über eine Aufgabe
+    "aroused": 300,      # 5 min — Grund-Takt; lange Szenen nähren per Refresh
 }
 _PORT = 8799
 
