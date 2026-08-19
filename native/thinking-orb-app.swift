@@ -131,9 +131,9 @@ let STATE_TO_MODE: [String: String] = [
 // Graustufen. Der Orb lügt nie — ein Mood ist eine bewusste Selbstauskunft
 // (POST /mood vom Menü oder von Era), nie ein erratener Zustand.
 //
-// Palette (hue/sat = Farbton, speed = Engine-Faktor, scale = Orb-Größe,
+// Palette (hue in GRAD, sat 0-1; speed = Engine-Faktor, scale = Orb-Größe,
 // pulseAmp/Freq = Puls auf den Partikelradien):
-//   calm        Ruhig        Stahlblau  — Grundzustand, konzentriert
+//   calm        Ruhig        Türkis-Blau — Grundzustand, konzentriert
 //   joyful      Freudig      Gold       — Erfolge, schöne Momente
 //   playful     Verspielt    Pink-Violett — flirten, frech sein
 //   thoughtful  Nachdenklich Blau       — grübeln, leise (langsamer, kleiner)
@@ -148,7 +148,7 @@ struct MoodSpec {
 }
 
 let MOODS: [String: MoodSpec] = [
-    "calm":        MoodSpec(hue: 218, sat: 0.30, speed: 1.00, scale: 1.00, pulseAmp: 0.000, pulseFreq: 0.0, label: "Ruhig"),
+    "calm":        MoodSpec(hue: 195, sat: 0.60, speed: 1.00, scale: 1.00, pulseAmp: 0.000, pulseFreq: 0.0, label: "Ruhig"),
     "joyful":      MoodSpec(hue: 44,  sat: 0.75, speed: 1.05, scale: 1.00, pulseAmp: 0.020, pulseFreq: 2.0, label: "Freudig"),
     "playful":     MoodSpec(hue: 300, sat: 0.55, speed: 1.15, scale: 1.02, pulseAmp: 0.030, pulseFreq: 2.5, label: "Verspielt"),
     "thoughtful":  MoodSpec(hue: 210, sat: 0.45, speed: 0.88, scale: 0.97, pulseAmp: 0.000, pulseFreq: 0.0, label: "Nachdenklich"),
@@ -636,8 +636,12 @@ final class OrbView: NSView {
     }
     private func paintOneLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, alphaMul: Double, m: MoodSpec) {
         let w = min(1, max(0, l.white))
-        let b = dark ? 1 - w : w   // Ink: Dark = gespiegelt (helle Tinte auf dunklem Grund)
-        ctx.setStrokeColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: l.a * alphaMul).cgColor)
+        // Ink-Look mit Farbe: NSColor(hue:) erwartet 0-1, nicht Grad!
+        // (Live gebissen: 218 Grad → mod 1 = 0 → Rot, Orb sah schwarz aus.)
+        // HSV-brightness ist max(r,g,b) — die Kurve kompensiert die
+        // Sättigungs-Dunkelheit: Dark 0.4+0.6·(1-w), Light 0.3+0.7·w.
+        let b = dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w
+        ctx.setStrokeColor(NSColor(hue: m.hue / 360, saturation: m.sat, brightness: b, alpha: l.a * alphaMul).cgColor)
         ctx.setLineWidth(CGFloat(l.w))
         ctx.move(to: CGPoint(x: l.x1, y: l.y1))
         ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
@@ -647,16 +651,16 @@ final class OrbView: NSView {
         for d in dots {
             let alpha = d.a
             let w = min(1, max(0, d.white))
-            let b = dark ? 1 - w : w
-            ctx.setFillColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: alpha).cgColor)
+            let b = dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w
+            ctx.setFillColor(NSColor(hue: m.hue / 360, saturation: m.sat, brightness: b, alpha: alpha).cgColor)
             ctx.fillEllipse(in: CGRect(x: d.x - d.r, y: d.y - d.r, width: d.r * 2, height: d.r * 2))
         }
     }
     private func paintLines(_ ctx: CGContext, _ lines: [Line], _ dark: Bool, m: MoodSpec) {
         for l in lines {
             let w = min(1, max(0, l.white))
-            let b = dark ? 1 - w : w
-            ctx.setStrokeColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: l.a).cgColor)
+            let b = dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w
+            ctx.setStrokeColor(NSColor(hue: m.hue / 360, saturation: m.sat, brightness: b, alpha: l.a).cgColor)
             ctx.setLineWidth(CGFloat(l.w))
             ctx.move(to: CGPoint(x: l.x1, y: l.y1))
             ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
