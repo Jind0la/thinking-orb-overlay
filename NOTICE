@@ -1,0 +1,7 @@
+Thinking Orb Overlay
+Copyright (c) 2026 Hermes Agent contributors
+
+The 3D particle engine in `native/thinking-orb-app.swift` and
+`plugin/plugin.js` is a port of the MIT-licensed library "thinking-orbs" by
+Jakub Antalik & Alex Brinza — https://github.com/Jakubantalik/thinking-orbs
+(engine sources under `src/engine/`). See LICENSE.thinking-orbs.

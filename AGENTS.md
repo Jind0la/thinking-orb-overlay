@@ -1,58 +1,45 @@
-# <Projektname> — Projektkontext
+# Thinking Orb Overlay — Projektkontext
 
-Kurzbeschreibung: <Was ist das Projekt? Ein Satz.>
-Stack: <z.B. React 18 + Vite + TypeScript, deutsch>
+Native macOS-App: schwebender Agent-Status-Orb (3D-Partikel-Engine, Port von
+thinking-orbs) über dem Desktop, live gekoppelt an den Hermes-Agent-Status
+(Chip → Plugin-Backend → 127.0.0.1:8799 → App). An Hermes gebunden = gewollt.
+
+Stack: Swift (Cocoa/CoreGraphics, kein Xcode-Projekt — `native/build-app.sh`)
++ Hermes-Desktop-Plugin (`plugin/`).
 
 ## Struktur
 
-- <Wichtige Ordner und ihre Aufgabe>
+- `native/thinking-orb-app.swift` — App: borderless Floating-Fenster, Engine,
+  State-Morphing (0,8 s Smoothstep), Poller (in-Flight-Guard), Menübar-Icon
+- `native/build-app.sh` — Compile (universal) + Bundle + Signing
+- `native/thinking-orb.sh` — Start/Stop
+- `plugin/dashboard/plugin_api.py` — Backend: /report (seq-Guard) + Loopback
+  127.0.0.1:8799/status (nur /status, hartes Bind-Flag)
+- `plugin/plugin.js` — Statusbar-Chip: host.state → /report (monotone seq)
+- `tests/` — pytest (Backend) + node (deriveState-Mapping)
 
 ## Tooling
 
-- Build: <npm run build o.ä.>
-- Dev: <npm run dev o.ä.>
-- Checks: <tsc, lint, Tests>
+- Build: `./native/build-app.sh` (Zertifikat „Agent Screen Dev")
+- Backend-Tests: `uv run --with "pytest,httpx,fastapi" pytest tests/ -q`
+- Derive-Tests: `node tests/test_derive.mjs`
+- Start: `./native/thinking-orb.sh` / Stop: `./native/thinking-orb.sh stop`
 
 ## Verbindliche Regeln (Eigentümer)
 
-<!-- Projektspezifische Regeln hier eintragen (Design, Architektur, Konventionen).
-     Die globalen Design-Qualitätsregeln gelten automatisch
-     (~/.cursor/rules/design-quality.mdc) — hier nur ERGÄNZENDES. -->
+- **Der Orb lügt nie:** bei Verbindungsfehler letzten State behalten; Backend
+  verweigert Stale-seq und nicht-gebundenen Port hart (503).
+- Fenster: rahmenlos, transparent, kein Focus-Steal (`orderFrontRegardless`),
+  Escape-Hatch über Menübar-Icon (Durchklick-Toggle ist sonst Lockout).
+- Manueller State im Menü pinnt; „Live folgen" gibt an den Poller zurück.
 
 ## Agent-Zusammenarbeit (verbindlich)
 
-Dieses Projekt wird von mehreren Agenten bearbeitet (Hermes = Orchestratorin,
-Cursor, Grok Build) und von einem Menschen (Nimar) gesteuert. Diese Regeln
-gelten für jeden Agenten:
-
-### War Room
-- Projekt-Log: `docs/WAR_ROOM.md` — vor der Arbeit lesen (Kontext, laufende
-  Tasks, Entscheidungen, bekannte Gaps), nach der Arbeit eigenen Teil
-  aktualisieren.
-- **Verdichtung:** Datei unter ~150 Zeilen halten. Abgeschlossene Tasks aus
-  "Laufende Tasks" entfernen, alte Einträge (>2 Wochen) kürzen. Kein
-  Session-Protokoll — Arbeitsgedächtnis.
-
-### Zwischenstands-Pflicht
-- Bei Tasks mit >5 Tool-Calls oder >2 Minuten Laufzeit: mindestens EIN
-  Zwischenstand dokumentieren (was fertig ist, was als Nächstes kommt,
-  offene Fragen), BEVOR das Endergebnis gemeldet wird. Menschen steuern
-  die Arbeit live, nicht erst beim Ergebnis.
-
-### Cross-Review
-- Nichts mergen, ohne dass ein ANDERER Agent (anderer Provider) den Diff
-  reviewt hat. Ein Modell, das die eigene Familie reviewt, wiederholt seine
-  eigenen blinden Flecken.
-- Review-Kriterien: Bugs, Security, Race Conditions, fehlende Tests,
-  Design-Konformität.
-
-### Ehrlichkeit (Known Limitations)
-- Keine geschönten Erfolgsmeldungen. Was nicht funktioniert, wird als
-  bekannte Lücke in die Gap-Liste im War Room eingetragen — mit Workaround
-  oder Fix-Plan.
-
-### Git-Identität
-- Agent-Arbeit per `Co-authored-by:`-Trailer kennzeichnen:
-  `Co-authored-by: Cursor <cursor@anysphere.com>` /
-  `Co-authored-by: Grok Build <grok@x.ai>`.
-- Autorenschaft bleibt getrennt: wer gebaut hat ≠ wer orchestriert hat.
+- War-Room (`docs/WAR_ROOM.md`) lesen vor Arbeit, aktualisieren danach;
+  unter ~150 Zeilen halten.
+- Zwischenstands-Pflicht bei >5 Tool-Calls.
+- Cross-Review (anderer Provider) vor Merge auf main; Merge nur mit Nimars OK.
+- Commit mit `Co-authored-by:`-Trailer; Feature-Branch → Push → Merge,
+  nie direkt auf main. Push mit x-access-token-URL.
+- Plugin-Installationen (~/.hermes/plugins + desktop-plugins) sind Kopien —
+  Repo (`plugin/`) ist die Quelle, Fixes dort und zurückspiegeln.

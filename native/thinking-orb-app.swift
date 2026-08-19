@@ -490,6 +490,9 @@ final class OrbView: NSView {
     private var timer: Timer?
     private var t: Double = 0
     private var resolved: (mode: String, speed: Double, opts: [String: Double]) = resolvePreset("breathing")
+    /// Manuell gepinnt (Menü): der Poller überschreibt den gewählten State
+    /// nicht mehr — „Live folgen" löst das Pin.
+    private var pinned = false
 
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
@@ -535,6 +538,7 @@ final class OrbView: NSView {
     }
 
     override var isOpaque: Bool { false }
+    override var isFlipped: Bool { true }   // NSView-y nach unten → nicht gespiegelt
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let size = Double(bounds.width)
@@ -612,16 +616,20 @@ final class OrbView: NSView {
     }
     /// Wird vom Poller aufgerufen, wenn das Backend einen neuen State meldet.
     func applyRemoteState(_ newState: String) {
+        if pinned { return }
         let mode = STATE_TO_MODE[newState]
         if mode != nil && newState != state {
             beginTransition(to: newState)
         }
     }
+    /// Manuelles Setzen (Menü) — pinnt bis „Live folgen".
     func setState(_ newState: String) {
+        pinned = true
         if newState != state {
             beginTransition(to: newState)
         }
     }
+    func unpin() { pinned = false }
 }
 
 // MARK: - Status-Poller (Hermes-Plugin-Backend, 127.0.0.1:8799)
@@ -630,21 +638,34 @@ final class StatusPoller {
     private let orb: OrbView
     private var timer: Timer?
     private let url = URL(string: "http://127.0.0.1:8799/status")!
+    private var inFlight = false
+    private var generation = 0
     init(orb: OrbView) { self.orb = orb }
     func start() {
+        guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
         poll()
     }
+    deinit { timer?.invalidate() }
     private func poll() {
+        guard !inFlight else { return }   // kein Overlap → keine Out-of-Order-Lügen
+        inFlight = true
+        let gen = generation
         var req = URLRequest(url: url, timeoutInterval: 3)
         req.httpMethod = "GET"
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
-            guard let self, let data, error == nil,
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let state = obj["state"] as? String else { return }
-            DispatchQueue.main.async { self.orb.applyRemoteState(state) }
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.inFlight = false
+                guard gen == self.generation,
+                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                      error == nil, let data,
+                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let state = obj["state"] as? String else { return }
+                self.orb.applyRemoteState(state)
+            }
         }.resume()
     }
 }
@@ -655,6 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var orbView: OrbView!
     private var poller: StatusPoller?
+    private var statusItem: NSStatusItem?
     private var clickThrough = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -704,14 +726,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.orderFrontRegardless()
 
+        setupStatusItem()
         poller = StatusPoller(orb: orbView)
         poller?.start()
         NSLog("[thinking-orb] running — state breathing")
     }
 
+    /// Escape-Hatch: Accessory-App (LSUIElement, kein Dock-Icon) braucht ein
+    /// Menübar-Icon — sonst wäre „Durchklickbar" ein Lockout ohne Ausweg.
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let btn = item.button {
+            btn.image = NSImage(systemSymbolName: "circle.dotted.circle", accessibilityDescription: "Thinking Orb")
+        }
+        let menu = NSMenu()
+        let live = NSMenuItem(title: "Live folgen", action: #selector(unpinState), keyEquivalent: "")
+        live.target = self
+        menu.addItem(live)
+        let ct = NSMenuItem(title: "Durchklickbar", action: #selector(toggleClickThrough), keyEquivalent: "")
+        ct.target = self
+        menu.addItem(ct)
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Beenden", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        item.menu = menu
+        statusItem = item
+    }
+
     @objc private func pickState(_ sender: NSMenuItem) {
         if let s = sender.representedObject as? String { orbView.setState(s) }
     }
+    @objc private func unpinState() { orbView.unpin() }
     @objc private func setSizeSmall() { resize(40) }
     @objc private func setSizeMid() { resize(96) }
     @objc private func setSizeLarge() { resize(160) }
@@ -724,8 +768,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleClickThrough() {
         clickThrough.toggle()
         window.ignoresMouseEvents = clickThrough
-        // Im Durchklick-Modus kein Menü mehr erreichbar — Hinweis via Titel.
-        window.title = clickThrough ? "Durchklickbar — Menü via Terminal: killall thinking-orb-app" : "Thinking Orb"
     }
 }
 

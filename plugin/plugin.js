@@ -3,7 +3,7 @@
  * State: busy -> working · idle -> breathing · manual override via popover.
  */
 import { jsx } from 'react/jsx-runtime'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useValue, host } from '@hermes/plugin-sdk'
 
 /* ================= engine (port of thinking-orbs) ================= */
@@ -445,11 +445,9 @@ function resolvePreset(state, size) {
 }
 
 /* ================= canvas component ================= */
-function OrbCanvas({ size, stateRef, paused }) {
-  const canvasRef = { current: null }
-  const cleanupRef = { current: null }
-
-  const init = () => {
+function OrbCanvas({ size, stateRef }) {
+  const canvasRef = useRef(null)
+  useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1)
@@ -482,48 +480,41 @@ function OrbCanvas({ size, stateRef, paused }) {
       clearInterval(stateWatch)
       mq.removeEventListener('change', onDark)
     }
-  }
+  }, [size, stateRef])
 
-  const mount = ref => {
-    if (cleanupRef.current) { cleanupRef.current(); cleanupRef.current = null }
-    canvasRef.current = ref
-    if (ref) cleanupRef.current = init()
-  }
-
-  return jsx('canvas', { ref: mount, style: { width: size, height: size, display: 'block' }, 'aria-label': 'Era status orb' })
+  return jsx('canvas', { ref: canvasRef, style: { width: size, height: size, display: 'block' }, 'aria-label': 'Era status orb' })
 }
 
-/* ================= chip + popover ================= */
-const STATES = ['working', 'searching', 'solving', 'listening', 'connecting', 'weaving', 'composing', 'breathing', 'shaping']
+/* ================= chip ================= */
 let _ctx = null
+let _seq = 0
+
+function deriveState(gateway, busy, awaiting) {
+  const g = typeof gateway === 'string' && !['open', 'connected', 'online'].includes(gateway) ? 'connecting' : null
+  return g || (busy ? 'working' : awaiting ? 'listening' : 'breathing')
+}
 
 function OrbChip() {
   const busy = useValue(host.state.busy)
   const awaiting = useValue(host.state.awaitingResponse)
   const gateway = useValue(host.state.gateway)
+  const stateRef = useRef('breathing')
 
-  // Status an das Plugin-Backend melden (→ 127.0.0.1:8799 für die Orb-App)
+  // Status an das Plugin-Backend melden (→ 127.0.0.1:8799 für die Orb-App).
+  // Monotone seq verhindert Out-of-Order-Lügen (Backend übernimmt nur
+  // seq >= letzte) — deterministischer als Abort bei unbekanntem signal-Support.
   useEffect(() => {
-    const g = typeof gateway === 'string' && !['open', 'connected', 'online'].includes(gateway) ? 'connecting' : null
-    const state = g || (busy ? 'working' : awaiting ? 'listening' : 'breathing')
-    _ctx?.rest('/report', { method: 'POST', body: { state } }).catch(() => {})
+    const state = deriveState(gateway, busy, awaiting)
+    const seq = ++_seq
+    _ctx?.rest('/report', { method: 'POST', body: { state, seq } }).catch(() => {})
   }, [busy, awaiting, gateway])
 
-  const autoState = () => {
-    const g = typeof gateway === 'string' && !['open', 'connected', 'online'].includes(gateway) ? 'connecting' : null
-    if (g) return g
-    if (busy) return 'working'
-    if (awaiting) return 'listening'
-    return 'breathing'
-  }
-  const stateRef = { current: 'breathing' }
-  stateRef.current = autoState()
+  stateRef.current = deriveState(gateway, busy, awaiting)
 
   return jsx('button', {
     style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 22, height: 22 },
     'aria-label': 'Era status: ' + LABELS[stateRef.current],
-    title: null,
-    children: jsx(OrbCanvas, { size: 22, stateRef: stateRef, paused: false })
+    children: jsx(OrbCanvas, { size: 22, stateRef: stateRef })
   })
 }
 
