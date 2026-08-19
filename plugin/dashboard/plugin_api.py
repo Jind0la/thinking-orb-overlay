@@ -19,9 +19,17 @@ bewusste Stimmung (Era-Selbstauskunft). `/mood` ist ein POST auf dem
 Loopback-Server (wie /status: kein Auth, nur 127.0.0.1) — gesetzt von der
 Orb-App (Menü) oder von Era direkt per HTTP. Der Chip-Report (/report)
 fasst den Mood NIE an — nur ein expliziter /mood-Schreib ändert ihn.
+
+Moods klingen ab (2026-08-19, User: „so lange halten bis es passt, dann
+zurück in neutral"): jeder Mood hat einen Timeout (s. _MOOD_TIMEOUTS).
+Erneutes Setzen desselben Moods frischt den Timer auf — die Emotion hält,
+solange sie genährt wird; ohne Nachsetzen fällt der Orb von selbst auf
+calm zurück. Kein manuelles Zurücksetzen mehr nötig (vergessener Mood
+lügt nie dauerhaft).
 """
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from fastapi import APIRouter, Request
@@ -35,12 +43,36 @@ _ALLOWED = {"working", "searching", "solving", "listening", "connecting",
 # lügt nie. Palette + Verhalten: Skill "orb-mood".
 _ALLOWED_MOODS = {"calm", "joyful", "playful", "thoughtful", "shy",
                   "embarrassed", "annoyed", "aroused"}
+# Abklingzeiten in Sekunden — wie lange ein Mood ohne Auffrischen hält.
+# calm hat keinen Timeout (Grundzustand).
+_MOOD_TIMEOUTS = {
+    "shy": 480,          # 8 min — Verlegenheit klingt schnell ab
+    "embarrassed": 360,  # 6 min — noch schneller
+    "joyful": 720,       # 12 min
+    "playful": 600,      # 10 min
+    "thoughtful": 1200,  # 20 min — Grübeln dauert
+    "annoyed": 600,      # 10 min — soll nicht ewig gären
+    "aroused": 900,      # 15 min — darf bleiben, klingt aber auch ab
+}
 _PORT = 8799
 
-_state = {"state": "breathing", "seq": 0, "mood": "calm"}
+_state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
 _lock = threading.Lock()
 _bound = False
 _httpd: ThreadingHTTPServer | None = None
+
+
+def _decay_mood() -> None:
+    """Mood abklingen lassen: Timeout abgelaufen → zurück auf calm.
+    Muss unter _lock aufgerufen werden. calm selbst hat keinen Timeout."""
+    now = time.time()
+    mood = _state["mood"]
+    if mood == "calm":
+        return
+    timeout = _MOOD_TIMEOUTS.get(mood, _MOOD_TIMEOUTS["shy"])
+    if now - _state["mood_set_at"] > timeout:
+        _state["mood"] = "calm"
+        _state["mood_set_at"] = now
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -50,6 +82,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         with _lock:
+            _decay_mood()
             body = json.dumps({"state": _state["state"], "mood": _state["mood"]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -61,6 +94,8 @@ class _Handler(BaseHTTPRequestHandler):
         # NUR exakt /mood — Stimmung bewusst setzen (Era per HTTP oder App-Menü).
         # Kein seq-Guard nötig: mood ist kein Rennen, sondern der letzte
         # bewusste Schreib gewinnt. State-Reports (/report) fassen mood nie an.
+        # Erneutes Setzen frischt den Abkling-Timer auf („so lange halten,
+        # bis es passt").
         if self.path != "/mood":
             self.send_error(404)
             return
@@ -76,6 +111,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         with _lock:
             _state["mood"] = mood
+            _state["mood_set_at"] = time.time()
         self._json({"ok": True})
 
     def _json(self, obj: dict, code: int = 200):

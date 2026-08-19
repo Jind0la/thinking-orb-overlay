@@ -538,6 +538,12 @@ final class OrbView: NSView {
     /// Benachrichtigt den AppDelegate über Pin-Wechsel (für Menü-Häkchen).
     var onPinChange: ((Bool) -> Void)?
 
+    // Mood-Übergang: Farben/Dynamik morphen weich (gleiche Smoothstep-Kurve
+    // wie der State-Morph) — der Orb springt nie hart zwischen Stimmungen.
+    private var moodFrom: MoodSpec = moodSpec("calm")
+    private var moodTo: MoodSpec = moodSpec("calm")
+    private var moodT: Double = 1.0   // 1 = Übergang fertig
+
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
     private var fromDots: [Dot] = []
@@ -559,11 +565,36 @@ final class OrbView: NSView {
     private func tick() {
         // Mood moduliert die Engine-Geschwindigkeit (aufgeregt = schneller,
         // schüchtern = langsamer) — die zweite Dimension neben dem State.
-        t += 1.0 / 60.0 * resolved.speed * moodSpec(mood).speed
+        t += 1.0 / 60.0 * resolved.speed * currentMoodSpec().speed
         if transitionT < 1 {
             transitionT = min(1, transitionT + 1.0 / 60.0 / transitionDuration)
         }
+        if moodT < 1 {
+            moodT = min(1, moodT + 1.0 / 60.0 / transitionDuration)
+        }
         needsDisplay = true
+    }
+
+    /// Hue-Interpolation auf dem Farbkreis (kurzer Weg, kein Umdrehen).
+    private func lerpHue(_ a: Double, _ b: Double, _ f: Double) -> Double {
+        var d = (b - a).truncatingRemainder(dividingBy: 360)
+        if d > 180 { d -= 360 }
+        if d < -180 { d += 360 }
+        return a + d * f
+    }
+
+    /// Die aktuell zu zeichnende Mood-Spec — während eines Übergangs die
+    /// interpolierten Werte zwischen alter und neuer Stimmung.
+    private func currentMoodSpec() -> MoodSpec {
+        let f = smoothStep(min(1, moodT))
+        let from = moodFrom, to = moodTo
+        return MoodSpec(hue: lerpHue(from.hue, to.hue, f),
+                        sat: lerp(from.sat, to.sat, f),
+                        speed: lerp(from.speed, to.speed, f),
+                        scale: lerp(from.scale, to.scale, f),
+                        pulseAmp: lerp(from.pulseAmp, to.pulseAmp, f),
+                        pulseFreq: lerp(from.pulseFreq, to.pulseFreq, f),
+                        label: to.label)
     }
 
     private func angleOf(_ d: Dot) -> Double {
@@ -594,7 +625,7 @@ final class OrbView: NSView {
         var frame = FRAMES[resolved.mode]!(size, t, resolved.opts)
         // Mood-Dynamik: Orb-Größe (scale) + Puls auf den Partikelradien —
         // aufgeregt schwillt der Orb leicht, schüchtern zieht er sich zurück.
-        let m = moodSpec(mood)
+        let m = currentMoodSpec()
         let pulse = 1 + m.pulseAmp * sin(t * m.pulseFreq)
         for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse }
         for i in frame.lines.indices { frame.lines[i].w *= m.scale }
@@ -673,6 +704,7 @@ final class OrbView: NSView {
         // (Pin sperrt nur die Aktivitäts-Darstellung, nicht die Emotion).
         if let newMood, MOODS[newMood] != nil, newMood != mood {
             print("[thinking-orb] mood \(mood) -> \(newMood)")
+            beginMoodTransition(to: newMood)
             mood = newMood
             onMoodChange?(newMood)
         }
@@ -692,11 +724,18 @@ final class OrbView: NSView {
         }
     }
     /// Stimmung setzen (Menü oder Backend) — kein Pin nötig: der Mood ist
-    /// der aktuelle Zustand, bis er bewusst gewechselt wird.
+    /// der aktuelle Zustand, bis er bewusst gewechselt wird oder abklingt.
     func setMood(_ newMood: String) {
         guard MOODS[newMood] != nil, newMood != mood else { return }
+        beginMoodTransition(to: newMood)
         mood = newMood
         onMoodChange?(newMood)
+    }
+    /// Mood-Übergang starten: alte Spec einfrieren, neue ansteuern.
+    private func beginMoodTransition(to newMood: String) {
+        moodFrom = moodSpec(mood)
+        moodTo = moodSpec(newMood)
+        moodT = 0
     }
     func unpin() {
         pinned = false

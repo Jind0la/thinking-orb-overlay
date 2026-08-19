@@ -31,11 +31,11 @@ client = TestClient(_app)
 def isolated_backend_state():
     """Jeder Test startet mit bekanntem Zustand — keine Reihenfolge-Lotterie."""
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm"}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
         plugin_api._bound = True
     yield
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm"}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
         plugin_api._bound = True
 
 
@@ -211,6 +211,72 @@ def test_mood_wrong_path_404():
             assert code == 404, f"{path} → {code}"
         with plugin_api._lock:
             assert plugin_api._state["mood"] == "calm"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --- Mood-Abklingen (Timeout, 2026-08-19) ---
+
+
+def test_mood_decays_after_timeout():
+    """Timeout abgelaufen → /status liefert calm (Orb fällt von selbst zurück)."""
+    server, base = _mood_server()
+    try:
+        import time as _t
+        with plugin_api._lock:
+            plugin_api._state["mood"] = "shy"
+            plugin_api._state["mood_set_at"] = _t.time() - plugin_api._MOOD_TIMEOUTS["shy"] - 10
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mood_keeps_within_timeout():
+    """Innerhalb des Timeouts bleibt der Mood stehen."""
+    server, base = _mood_server()
+    try:
+        import time as _t
+        with plugin_api._lock:
+            plugin_api._state["mood"] = "joyful"
+            plugin_api._state["mood_set_at"] = _t.time() - 60  # 12min-Timeout, 1min alt
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "joyful"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mood_repost_refreshes_timer():
+    """Erneutes Setzen frischt den Timer auf — Emotion hält, solange genährt."""
+    server, base = _mood_server()
+    try:
+        import time as _t
+        with plugin_api._lock:
+            plugin_api._state["mood"] = "aroused"
+            plugin_api._state["mood_set_at"] = _t.time() - plugin_api._MOOD_TIMEOUTS["aroused"] + 5
+        # Fast abgelaufen — ein neuer POST resetet
+        code, _ = _post(base, "/mood", {"mood": "aroused"})
+        assert code == 200
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "aroused"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_calm_has_no_timeout():
+    """calm ist der Grundzustand — kein Timeout, bleibt stabil."""
+    server, base = _mood_server()
+    try:
+        import time as _t
+        with plugin_api._lock:
+            plugin_api._state["mood"] = "calm"
+            plugin_api._state["mood_set_at"] = _t.time() - 99999
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
     finally:
         server.shutdown()
         server.server_close()

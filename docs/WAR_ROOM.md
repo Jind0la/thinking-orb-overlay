@@ -20,6 +20,11 @@ dich repräsentieren").
   erraten** (Orb lügt nie) — POST /mood auf dem Loopback (Era per curl oder
   App-Menü), der Chip-Report fasst mood nie an. Palette + Verhalten:
   Skill `orb-mood`.
+- **Moods klingen ab** (2026-08-19, User: „so lange halten bis es passt,
+  dann zurück in neutral"): Timeout pro Mood (6-20 min, `_MOOD_TIMEOUTS`),
+  erneutes Setzen frischt den Timer auf. Kein manuelles Zurücksetzen nötig;
+  Farbwechsel in der App morphen weich (0,8s Smoothstep, gleiche Kurve wie
+  State-Morph).
 - **Pet-System verworfen** (2026-08-19): max. 6 Frames/State @ 1100ms ≈ 5,4 fps
   — der Orb lebt von 60fps-Partikelbewegung. Nur Overlay-App liefert „wirklich
   3D und flüssig". User-Go: „Ja mach!"
@@ -80,6 +85,5 @@ dich repräsentieren").
   bekommt keinen Status (gewollt: „an Hermes gebunden passt schon").
 - Durchklick-Modus (ignoresMouseEvents) + Bewegen im selben Modus = Konflikt;
   v1: Toggle im Menü, Bewegen nur bei „interaktiv".
-- Mood hat kein Timeout — bewusster Wechsel nötig (Doku im Skill orb-mood).
 - weaving/shaping nur manuell erreichbar (Chip erzeugt sie nie) — gewollt
   reserviert, kein Action-Punkt.
