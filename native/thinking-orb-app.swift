@@ -493,6 +493,8 @@ final class OrbView: NSView {
     /// Manuell gepinnt (Menü): der Poller überschreibt den gewählten State
     /// nicht mehr — „Live folgen" löst das Pin.
     private var pinned = false
+    /// Benachrichtigt den AppDelegate über Pin-Wechsel (für Menü-Häkchen).
+    var onPinChange: ((Bool) -> Void)?
 
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
@@ -625,11 +627,15 @@ final class OrbView: NSView {
     /// Manuelles Setzen (Menü) — pinnt bis „Live folgen".
     func setState(_ newState: String) {
         pinned = true
+        onPinChange?(true)
         if newState != state {
             beginTransition(to: newState)
         }
     }
-    func unpin() { pinned = false }
+    func unpin() {
+        pinned = false
+        onPinChange?(false)
+    }
 }
 
 // MARK: - Status-Poller (Hermes-Plugin-Backend, 127.0.0.1:8799)
@@ -679,6 +685,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var poller: StatusPoller?
     private var statusItem: NSStatusItem?
     private var clickThroughItem: NSMenuItem?
+    private var liveItem: NSMenuItem?
+    private var windowLiveItem: NSMenuItem?
+    private var stateItems: [NSMenuItem] = []
     private var clickThrough = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -711,7 +720,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let statesItem = NSMenuItem(title: "State", action: nil, keyEquivalent: "")
         statesItem.submenu = statesMenu
+        stateItems = statesMenu.items
         menu.addItem(statesItem)
+        let liveWin = NSMenuItem(title: "Live folgen", action: #selector(unpinState), keyEquivalent: "")
+        liveWin.target = self
+        windowLiveItem = liveWin
+        menu.addItem(liveWin)
         menu.addItem(NSMenuItem.separator())
         for (title, sel) in [("Klein (40)", #selector(setSizeSmall)), ("Mittel (96)", #selector(setSizeMid)), ("Groß (160)", #selector(setSizeLarge))] {
             let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
@@ -730,6 +744,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
 
         setupStatusItem()
+        orbView.onPinChange = { [weak self] pinned in
+            self?.updatePinUI(pinned: pinned)
+        }
+        updatePinUI(pinned: false)
         poller = StatusPoller(orb: orbView)
         poller?.start()
         NSLog("[thinking-orb] running — state breathing")
@@ -757,9 +775,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func pickState(_ sender: NSMenuItem) {
-        if let s = sender.representedObject as? String { orbView.setState(s) }
+        if let s = sender.representedObject as? String {
+            orbView.setState(s)
+            updatePinUI(pinned: true)
+        }
     }
-    @objc private func unpinState() { orbView.unpin() }
+    @objc private func unpinState() {
+        orbView.unpin()
+        updatePinUI(pinned: false)
+    }
+    /// Häkchen-Synchronisation: „Live folgen" = live; gepinnt → das
+    /// State-Untermenü markiert den gewählten State. Der Pin ist nie unsichtbar.
+    private func updatePinUI(pinned: Bool) {
+        liveItem?.state = pinned ? .off : .on
+        windowLiveItem?.state = pinned ? .off : .on
+        for item in stateItems {
+            let s = item.representedObject as? String
+            item.state = pinned && s == orbView.state ? .on : .off
+        }
+    }
     @objc private func setSizeSmall() { resize(40) }
     @objc private func setSizeMid() { resize(96) }
     @objc private func setSizeLarge() { resize(160) }
