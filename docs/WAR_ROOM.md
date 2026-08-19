@@ -59,6 +59,12 @@ dich repräsentieren").
   zeigte dauerhaft „connecting". Fix: `['open','connected','online']`.
 - **Mood-Farb-Logik**: Ink-Look bleibt — brightness = `dark ? 1-w : w`
   (Dark = helle Tinte, Light = dunkle Tinte), nur Farbton statt Grau.
+  Nachgebessert: Dark `0.4+0.6·(1-w)`, Light `0.3+0.7·w` (Sättigung dunkelt
+  ab — Kurve kompensiert).
+- **NSColor(hue:) erwartet 0-1, NICHT Grad** (live gebissen, 2026-08-19):
+  hue=218 Grad → mod 1 = 0 → Rot statt Blau; Orb wirkte auf dunklem Grund
+  schwarz. Fix `hue/360` — von Nimar visuell bestätigt („jetzt passt die
+  Farbe").
 - **/mood ohne seq-Guard** (bewusst): mood ist kein Rennen, letzter bewusster
   Schreib gewinnt; state-Reports dürfen mood nie überschreiben (getestet).
 - `send_error(404)` liefert HTML — Test-Helper parst JSON tolerant.
