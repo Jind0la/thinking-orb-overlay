@@ -491,6 +491,13 @@ final class OrbView: NSView {
     private var t: Double = 0
     private var resolved: (mode: String, speed: Double, opts: [String: Double]) = resolvePreset("breathing")
 
+    // State-Transition (Morph): alter State wird als Snapshot eingefroren und
+    // die Punkte interpolieren weich zu den Positionen des neuen State.
+    private var fromDots: [Dot] = []
+    private var fromLines: [Line] = []
+    private var transitionT: Double = 1.0   // 1 = keine Transition aktiv
+    private let transitionDuration: Double = 0.8
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -504,8 +511,29 @@ final class OrbView: NSView {
 
     private func tick() {
         t += 1.0 / 60.0 * resolved.speed
+        if transitionT < 1 {
+            transitionT = min(1, transitionT + 1.0 / 60.0 / transitionDuration)
+        }
         needsDisplay = true
     }
+
+    private func angleOf(_ d: Dot) -> Double {
+        let cx = Double(bounds.width) / 2, cy = Double(bounds.height) / 2
+        return atan2(d.y - cy, d.x - cx)
+    }
+    private func smoothStep(_ x: Double) -> Double { x * x * (3 - 2 * x) }
+
+    /// State wechseln MIT Morph-Übergang (Snapshots + Interpolation).
+    private func beginTransition(to newState: String) {
+        let size = Double(bounds.width)
+        let oldFrame = FRAMES[resolved.mode]!(size, t, resolved.opts)
+        fromDots = oldFrame.dots.sorted { angleOf($0) < angleOf($1) }
+        fromLines = oldFrame.lines
+        resolved = resolvePreset(newState)
+        state = newState
+        transitionT = 0
+    }
+
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
@@ -514,8 +542,51 @@ final class OrbView: NSView {
         ctx.clear(bounds)
         let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let frame = FRAMES[resolved.mode]!(size, t, resolved.opts)
-        if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance) }
-        paint(ctx, frame.dots, appearance)
+
+        if transitionT < 1 {
+            let ease = smoothStep(transitionT)
+            // Alte Linien blenden aus, neue ein
+            for l in fromLines {
+                paintOneLine(ctx, l, appearance, alphaMul: 1 - ease)
+            }
+            for l in frame.lines {
+                paintOneLine(ctx, l, appearance, alphaMul: ease)
+            }
+            // Punkte: indexweise per Winkel-Sortierung paaren; neue Punkte
+            // ohne Partner wachsen aus dem Zentrum (alpha 0 → 1)
+            let toDots = frame.dots.sorted { angleOf($0) < angleOf($1) }
+            let cx = size / 2, cy = size / 2
+            var morphed: [Dot] = []
+            morphed.reserveCapacity(toDots.count)
+            for (i, d) in toDots.enumerated() {
+                let from: Dot
+                if i < fromDots.count {
+                    from = fromDots[i]
+                } else {
+                    from = Dot(x: cx, y: cy, z: d.z, r: d.r, white: d.white, a: 0)
+                }
+                morphed.append(Dot(x: lerp(from.x, d.x, ease),
+                                   y: lerp(from.y, d.y, ease),
+                                   z: lerp(from.z, d.z, ease),
+                                   r: lerp(from.r, d.r, ease),
+                                   white: lerp(from.white, d.white, ease),
+                                   a: lerp(from.a, d.a, ease)))
+            }
+            paint(ctx, morphed, appearance)
+        } else {
+            if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance) }
+            paint(ctx, frame.dots, appearance)
+        }
+    }
+    private func paintOneLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, alphaMul: Double) {
+        let w = min(1, max(0, l.white))
+        let g = dark ? 1 - w : w
+        let gray = Int((g * 255).rounded())
+        ctx.setStrokeColor(CGColor(red: CGFloat(gray) / 255, green: CGFloat(gray) / 255, blue: CGFloat(gray) / 255, alpha: CGFloat(l.a * alphaMul)))
+        ctx.setLineWidth(CGFloat(l.w))
+        ctx.move(to: CGPoint(x: l.x1, y: l.y1))
+        ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
+        ctx.strokePath()
     }
     private func paint(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool) {
         for d in dots {
@@ -543,13 +614,13 @@ final class OrbView: NSView {
     func applyRemoteState(_ newState: String) {
         let mode = STATE_TO_MODE[newState]
         if mode != nil && newState != state {
-            state = newState
-            resolved = resolvePreset(newState)
+            beginTransition(to: newState)
         }
     }
     func setState(_ newState: String) {
-        resolved = resolvePreset(newState)
-        state = newState
+        if newState != state {
+            beginTransition(to: newState)
+        }
     }
 }
 
