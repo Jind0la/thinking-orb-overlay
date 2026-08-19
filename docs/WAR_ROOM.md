@@ -27,10 +27,25 @@ dich repräsentieren").
 
 ## Laufende Tasks
 
-- [ ] Swift-App: Fenster + Engine-Port + Polling + Menü (in Arbeit — Era)
-- [ ] Plugin-Backend `/status` (127.0.0.1:8799) + JS-Chip meldet Status
-- [ ] Build + Start + Verifikation (Vision-Check des schwebenden Orbs)
+- [x] Swift-App: Fenster + Engine-Port + Polling + Menü (gebaut, kompiliert, signiert, läuft — Orb sichtbar über Desktop, Vision-verifiziert)
+- [x] Plugin-Backend `/status` (127.0.0.1:8799) + JS-Chip meldet Status (Code fertig, Harness grün)
+- [x] **Live-Test bestanden**: `{"state":"working"}` während Agent busy — Kette läuft Ende-zu-Ende
 - [ ] Push GitHub (Branch `feat/overlay-app`)
+
+## Erkenntnisse 2026-08-19 (Build-Lauf)
+
+- Pet-Format verworfen (s. Entscheidungen); Overlay-App = der Weg.
+- `let _ctx = null`-Deklaration NACH erstem Patch vergessen → Toast `_ctx is
+  not defined` (Relikt, Harness beweist: Code grün). Hot-Reload lädt nach
+  Load-Fehler offenbar nicht automatisch neu — App-Neustart nötig.
+- Config-yaml-Write: Hermes-Parser blockt Inline-Edit; Lösung: Skript-Datei +
+  `uv run --with pyyaml`. Backup `config.yaml.bak-thinking-orb`.
+- Statusbar-Items sind AX-unsichtbar (auch „Voice aus" fehlt im Baum) —
+  Chip-Nachweis nur über Harness/Vision/User-Blick.
+- swiftc: Parameter `pow` schattiert globale pow() → umbenennen.
+- **ConnectionState = 'idle'|'connecting'|'open'|'closed'|'error'** — der
+  Gateway ist bei Verbindung `'open'`, NICHT 'connected'! Fehlender Check
+  zeigte dauerhaft „connecting". Fix: `['open','connected','online']`.
 
 ## Gaps / Bekannte Grenzen
 
