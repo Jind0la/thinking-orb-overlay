@@ -677,6 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var orbView: OrbView!
     private var poller: StatusPoller?
     private var statusItem: NSStatusItem?
+    private var clickThroughItem: NSMenuItem?
     private var clickThrough = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -745,6 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(live)
         let ct = NSMenuItem(title: "Durchklickbar", action: #selector(toggleClickThrough), keyEquivalent: "")
         ct.target = self
+        clickThroughItem = ct
         menu.addItem(ct)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Beenden", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -768,6 +770,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleClickThrough() {
         clickThrough.toggle()
         window.ignoresMouseEvents = clickThrough
+        // Zustand im Menü sichtbar machen — sonst weiß niemand, ob der
+        // Lockout aktiv ist.
+        clickThroughItem?.state = clickThrough ? .on : .off
     }
 }
 
