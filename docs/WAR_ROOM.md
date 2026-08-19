@@ -1,6 +1,6 @@
 # 13-thinking-orb-overlay — WAR ROOM
 
-Stand: 2026-08-19
+Stand: 2026-08-19 (Abend — Mood-Dimension)
 
 ## Zweck
 
@@ -12,6 +12,14 @@ dich repräsentieren").
 
 ## Entscheidungen
 
+- **Mood-Dimension** (2026-08-19, User-Auftrag: „Emotionen die zu uns
+  passen"): zweite Achse neben dem State. 8 bewusste Stimmungen (calm,
+  joyful, playful, thoughtful, shy, embarrassed, annoyed, aroused — inkl.
+  intimer wie schüchtern/verlegen/erregt, von Nimar explizit gewünscht).
+  Farbe + Speed/Scale/Puls statt Graustufen. **Nur explizit gesetzt, nie
+  erraten** (Orb lügt nie) — POST /mood auf dem Loopback (Era per curl oder
+  App-Menü), der Chip-Report fasst mood nie an. Palette + Verhalten:
+  Skill `orb-mood`.
 - **Pet-System verworfen** (2026-08-19): max. 6 Frames/State @ 1100ms ≈ 5,4 fps
   — der Orb lebt von 60fps-Partikelbewegung. Nur Overlay-App liefert „wirklich
   3D und flüssig". User-Go: „Ja mach!"
@@ -30,6 +38,9 @@ dich repräsentieren").
 - [x] Swift-App: Fenster + Engine-Port + Polling + Menü (gebaut, kompiliert, signiert, läuft — Orb sichtbar über Desktop, Vision-verifiziert)
 - [x] Plugin-Backend `/status` (127.0.0.1:8799) + JS-Chip meldet Status (Code fertig, Harness grün)
 - [x] **Live-Test bestanden**: `{"state":"working"}` während Agent busy — Kette läuft Ende-zu-Ende
+- [x] **Mood-Dimension**: Backend `/mood` + mood in `/status`, App-Farben/Speed/Puls/Menü, Tests (12 passed), Build+Sign OK, App neu gestartet (PID läuft)
+- [x] Skill `orb-mood` angelegt (Palette + Verhalten)
+- [ ] **Cmd+Q der Desktop-App** — Backend lädt den neuen `/mood`-Handler erst nach Neustart (Discovery-Cache; vorher: POST /mood → 501, /status ohne mood)
 - [ ] Push GitHub (Branch `feat/overlay-app`)
 
 ## Erkenntnisse 2026-08-19 (Build-Lauf)
@@ -46,6 +57,11 @@ dich repräsentieren").
 - **ConnectionState = 'idle'|'connecting'|'open'|'closed'|'error'** — der
   Gateway ist bei Verbindung `'open'`, NICHT 'connected'! Fehlender Check
   zeigte dauerhaft „connecting". Fix: `['open','connected','online']`.
+- **Mood-Farb-Logik**: Ink-Look bleibt — brightness = `dark ? 1-w : w`
+  (Dark = helle Tinte, Light = dunkle Tinte), nur Farbton statt Grau.
+- **/mood ohne seq-Guard** (bewusst): mood ist kein Rennen, letzter bewusster
+  Schreib gewinnt; state-Reports dürfen mood nie überschreiben (getestet).
+- `send_error(404)` liefert HTML — Test-Helper parst JSON tolerant.
 
 ## Gaps / Bekannte Grenzen
 
@@ -53,3 +69,6 @@ dich repräsentieren").
   bekommt keinen Status (gewollt: „an Hermes gebunden passt schon").
 - Durchklick-Modus (ignoresMouseEvents) + Bewegen im selben Modus = Konflikt;
   v1: Toggle im Menü, Bewegen nur bei „interaktiv".
+- Mood hat kein Timeout — bewusster Wechsel nötig (Doku im Skill orb-mood).
+- weaving/shaping nur manuell erreichbar (Chip erzeugt sie nie) — gewollt
+  reserviert, kein Action-Punkt.

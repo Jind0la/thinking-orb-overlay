@@ -7,6 +7,7 @@ der Thread scheitert dann still (Bind-Fehler-Log). Die Route-Tests setzen
 _bound gezielt; eine Autouse-Fixture isoliert _state/_seq/_bound zwischen
 den Tests (Definitionsreihenfolge-unabhängig).
 """
+import json
 import sys
 import threading
 import urllib.error
@@ -30,11 +31,11 @@ client = TestClient(_app)
 def isolated_backend_state():
     """Jeder Test startet mit bekanntem Zustand — keine Reihenfolge-Lotterie."""
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm"}
         plugin_api._bound = True
     yield
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm"}
         plugin_api._bound = True
 
 
@@ -113,6 +114,103 @@ def test_loopback_get_path_restriction():
                 raise AssertionError(f"{path} hätte 404 geben müssen")
             except urllib.error.HTTPError as e:
                 assert e.code == 404, f"{path} → {e.code}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --- Mood-Dimension (2026-08-19) ---
+
+
+def _mood_server():
+    """Ephemerer Loopback-Server mit dem echten _Handler (POST /mood)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), plugin_api._Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def _post(base, path, payload):
+    req = urllib.request.Request(
+        f"{base}{path}", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # send_error liefert HTML-Body — nur JSON parsen, wenn es eines ist
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {}
+
+
+def test_mood_set_and_status_includes_mood():
+    server, base = _mood_server()
+    try:
+        # Status enthält mood (Default calm)
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
+        code, body = _post(base, "/mood", {"mood": "shy"})
+        assert code == 200 and body == {"ok": True}
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "shy"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mood_unknown_rejected():
+    server, base = _mood_server()
+    try:
+        code, body = _post(base, "/mood", {"mood": "dancing"})
+        assert code == 400 and body == {"ok": False}
+        with plugin_api._lock:
+            assert plugin_api._state["mood"] == "calm"  # unverändert
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mood_bad_payload_rejected():
+    server, base = _mood_server()
+    try:
+        req = urllib.request.Request(f"{base}/mood", data=b"kein json",
+                                     method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=3)
+            raise AssertionError("hätte 400 geben müssen")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_state_report_leaves_mood_untouched():
+    """/report (Chip) fasst mood nie an — nur /mood ändert die Stimmung."""
+    server, base = _mood_server()
+    try:
+        _post(base, "/mood", {"mood": "aroused"})
+        r = client.post("/report", json={"state": "working", "seq": 1})
+        assert r.status_code == 200
+        with plugin_api._lock:
+            assert plugin_api._state["mood"] == "aroused"
+            assert plugin_api._state["state"] == "working"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_mood_wrong_path_404():
+    """POST nur auf exakt /mood — /status und Fremdpfade bleiben dicht."""
+    server, base = _mood_server()
+    try:
+        for path in ("/status", "/mood/", "/mood?x=1", "/whatever"):
+            code, _ = _post(base, path, {"mood": "shy"})
+            assert code == 404, f"{path} → {code}"
+        with plugin_api._lock:
+            assert plugin_api._state["mood"] == "calm"
     finally:
         server.shutdown()
         server.server_close()

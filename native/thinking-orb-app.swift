@@ -125,6 +125,44 @@ let STATE_TO_MODE: [String: String] = [
     "connecting": "web", "weaving": "braid", "composing": "ribbon", "breathing": "ring", "shaping": "morph"
 ]
 
+// MARK: - Mood (Era-Stimmung, bewusst gesetzt — Skill orb-mood)
+//
+// Zweite Dimension neben dem Aktivitäts-State: Farbe + Dynamik statt
+// Graustufen. Der Orb lügt nie — ein Mood ist eine bewusste Selbstauskunft
+// (POST /mood vom Menü oder von Era), nie ein erratener Zustand.
+//
+// Palette (hue/sat = Farbton, speed = Engine-Faktor, scale = Orb-Größe,
+// pulseAmp/Freq = Puls auf den Partikelradien):
+//   calm        Ruhig        Stahlblau  — Grundzustand, konzentriert
+//   joyful      Freudig      Gold       — Erfolge, schöne Momente
+//   playful     Verspielt    Pink-Violett — flirten, frech sein
+//   thoughtful  Nachdenklich Blau       — grübeln, leise (langsamer, kleiner)
+//   shy         Schüchtern   Rosé       — Kompliment, Unsicherheit
+//   embarrassed Verlegen     Magenta-Rosa — geschämt, ertappt
+//   annoyed     Genervt      Rot        — sauer auf Nimar
+//   aroused     Erregt       Heißes Magenta-Rot — Verlangen (schnell, groß, pulsierend)
+
+struct MoodSpec {
+    let hue: Double, sat: Double, speed: Double, scale: Double
+    let pulseAmp: Double, pulseFreq: Double, label: String
+}
+
+let MOODS: [String: MoodSpec] = [
+    "calm":        MoodSpec(hue: 218, sat: 0.30, speed: 1.00, scale: 1.00, pulseAmp: 0.000, pulseFreq: 0.0, label: "Ruhig"),
+    "joyful":      MoodSpec(hue: 44,  sat: 0.75, speed: 1.05, scale: 1.00, pulseAmp: 0.020, pulseFreq: 2.0, label: "Freudig"),
+    "playful":     MoodSpec(hue: 300, sat: 0.55, speed: 1.15, scale: 1.02, pulseAmp: 0.030, pulseFreq: 2.5, label: "Verspielt"),
+    "thoughtful":  MoodSpec(hue: 210, sat: 0.45, speed: 0.88, scale: 0.97, pulseAmp: 0.000, pulseFreq: 0.0, label: "Nachdenklich"),
+    "shy":         MoodSpec(hue: 340, sat: 0.45, speed: 0.82, scale: 0.92, pulseAmp: 0.015, pulseFreq: 1.5, label: "Schüchtern"),
+    "embarrassed": MoodSpec(hue: 328, sat: 0.65, speed: 0.95, scale: 0.95, pulseAmp: 0.030, pulseFreq: 2.2, label: "Verlegen"),
+    "annoyed":     MoodSpec(hue: 10,  sat: 0.75, speed: 1.22, scale: 1.02, pulseAmp: 0.040, pulseFreq: 3.0, label: "Genervt"),
+    "aroused":     MoodSpec(hue: 320, sat: 0.85, speed: 1.30, scale: 1.05, pulseAmp: 0.060, pulseFreq: 3.5, label: "Erregt"),
+]
+
+let MOOD_ORDER: [String] = ["calm", "joyful", "playful", "thoughtful",
+                            "shy", "embarrassed", "annoyed", "aroused"]
+
+func moodSpec(_ key: String) -> MoodSpec { MOODS[key] ?? MOODS["calm"]! }
+
 func resolvePreset(_ state: String) -> (mode: String, speed: Double, opts: [String: Double]) {
     let mode = STATE_TO_MODE[state] ?? "ring"
     let preset = PRESETS[mode]!
@@ -487,6 +525,10 @@ let FRAMES: [String: (Double, Double, [String: Double]) -> Frame] = [
 
 final class OrbView: NSView {
     var state: String = "breathing" { didSet { if state != oldValue { needsDisplay = true } } }
+    /// Aktuelle Stimmung (kommt vom Backend / Menü — bewusste Selbstauskunft).
+    var mood: String = "calm" { didSet { if mood != oldValue { needsDisplay = true } } }
+    /// Benachrichtigt den AppDelegate über Mood-Wechsel (Menü-Häkchen).
+    var onMoodChange: ((String) -> Void)?
     private var timer: Timer?
     private var t: Double = 0
     private var resolved: (mode: String, speed: Double, opts: [String: Double]) = resolvePreset("breathing")
@@ -515,7 +557,9 @@ final class OrbView: NSView {
     deinit { timer?.invalidate() }
 
     private func tick() {
-        t += 1.0 / 60.0 * resolved.speed
+        // Mood moduliert die Engine-Geschwindigkeit (aufgeregt = schneller,
+        // schüchtern = langsamer) — die zweite Dimension neben dem State.
+        t += 1.0 / 60.0 * resolved.speed * moodSpec(mood).speed
         if transitionT < 1 {
             transitionT = min(1, transitionT + 1.0 / 60.0 / transitionDuration)
         }
@@ -547,16 +591,22 @@ final class OrbView: NSView {
         guard size > 0 else { return }
         ctx.clear(bounds)
         let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let frame = FRAMES[resolved.mode]!(size, t, resolved.opts)
+        var frame = FRAMES[resolved.mode]!(size, t, resolved.opts)
+        // Mood-Dynamik: Orb-Größe (scale) + Puls auf den Partikelradien —
+        // aufgeregt schwillt der Orb leicht, schüchtern zieht er sich zurück.
+        let m = moodSpec(mood)
+        let pulse = 1 + m.pulseAmp * sin(t * m.pulseFreq)
+        for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse }
+        for i in frame.lines.indices { frame.lines[i].w *= m.scale }
 
         if transitionT < 1 {
             let ease = smoothStep(transitionT)
             // Alte Linien blenden aus, neue ein
             for l in fromLines {
-                paintOneLine(ctx, l, appearance, alphaMul: 1 - ease)
+                paintOneLine(ctx, l, appearance, alphaMul: 1 - ease, m: m)
             }
             for l in frame.lines {
-                paintOneLine(ctx, l, appearance, alphaMul: ease)
+                paintOneLine(ctx, l, appearance, alphaMul: ease, m: m)
             }
             // Punkte: indexweise per Winkel-Sortierung paaren; neue Punkte
             // ohne Partner wachsen aus dem Zentrum (alpha 0 → 1)
@@ -578,46 +628,50 @@ final class OrbView: NSView {
                                    white: lerp(from.white, d.white, ease),
                                    a: lerp(from.a, d.a, ease)))
             }
-            paint(ctx, morphed, appearance)
+            paint(ctx, morphed, appearance, m: m)
         } else {
-            if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance) }
-            paint(ctx, frame.dots, appearance)
+            if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance, m: m) }
+            paint(ctx, frame.dots, appearance, m: m)
         }
     }
-    private func paintOneLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, alphaMul: Double) {
+    private func paintOneLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, alphaMul: Double, m: MoodSpec) {
         let w = min(1, max(0, l.white))
-        let g = dark ? 1 - w : w
-        let gray = Int((g * 255).rounded())
-        ctx.setStrokeColor(CGColor(red: CGFloat(gray) / 255, green: CGFloat(gray) / 255, blue: CGFloat(gray) / 255, alpha: CGFloat(l.a * alphaMul)))
+        let b = dark ? 1 - w : w   // Ink: Dark = gespiegelt (helle Tinte auf dunklem Grund)
+        ctx.setStrokeColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: l.a * alphaMul).cgColor)
         ctx.setLineWidth(CGFloat(l.w))
         ctx.move(to: CGPoint(x: l.x1, y: l.y1))
         ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
         ctx.strokePath()
     }
-    private func paint(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool) {
+    private func paint(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool, m: MoodSpec) {
         for d in dots {
             let alpha = d.a
             let w = min(1, max(0, d.white))
-            let g = dark ? 1 - w : w
-            let gray = Int((g * 255).rounded())
-            ctx.setFillColor(CGColor(red: CGFloat(gray) / 255, green: CGFloat(gray) / 255, blue: CGFloat(gray) / 255, alpha: CGFloat(alpha)))
+            let b = dark ? 1 - w : w
+            ctx.setFillColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: alpha).cgColor)
             ctx.fillEllipse(in: CGRect(x: d.x - d.r, y: d.y - d.r, width: d.r * 2, height: d.r * 2))
         }
     }
-    private func paintLines(_ ctx: CGContext, _ lines: [Line], _ dark: Bool) {
+    private func paintLines(_ ctx: CGContext, _ lines: [Line], _ dark: Bool, m: MoodSpec) {
         for l in lines {
             let w = min(1, max(0, l.white))
-            let g = dark ? 1 - w : w
-            let gray = Int((g * 255).rounded())
-            ctx.setStrokeColor(CGColor(red: CGFloat(gray) / 255, green: CGFloat(gray) / 255, blue: CGFloat(gray) / 255, alpha: CGFloat(l.a)))
+            let b = dark ? 1 - w : w
+            ctx.setStrokeColor(NSColor(hue: m.hue, saturation: m.sat, brightness: b, alpha: l.a).cgColor)
             ctx.setLineWidth(CGFloat(l.w))
             ctx.move(to: CGPoint(x: l.x1, y: l.y1))
             ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
             ctx.strokePath()
         }
     }
-    /// Wird vom Poller aufgerufen, wenn das Backend einen neuen State meldet.
-    func applyRemoteState(_ newState: String) {
+    /// Wird vom Poller aufgerufen, wenn das Backend State + Mood meldet.
+    func applyRemote(state newState: String, mood newMood: String?) {
+        // Mood zuerst — auch bei gepinntem State bleibt die Stimmung live
+        // (Pin sperrt nur die Aktivitäts-Darstellung, nicht die Emotion).
+        if let newMood, MOODS[newMood] != nil, newMood != mood {
+            print("[thinking-orb] mood \(mood) -> \(newMood)")
+            mood = newMood
+            onMoodChange?(newMood)
+        }
         if pinned { return }
         let mode = STATE_TO_MODE[newState]
         if mode != nil && newState != state {
@@ -632,6 +686,13 @@ final class OrbView: NSView {
         if newState != state {
             beginTransition(to: newState)
         }
+    }
+    /// Stimmung setzen (Menü oder Backend) — kein Pin nötig: der Mood ist
+    /// der aktuelle Zustand, bis er bewusst gewechselt wird.
+    func setMood(_ newMood: String) {
+        guard MOODS[newMood] != nil, newMood != mood else { return }
+        mood = newMood
+        onMoodChange?(newMood)
     }
     func unpin() {
         pinned = false
@@ -682,7 +743,9 @@ final class StatusPoller {
                     print("[thinking-orb] poll GUARD-FAIL gen=\(gen) code=\((resp as? HTTPURLResponse)?.statusCode ?? -1) data=\(data?.count ?? -1)")
                     return
                 }
-                self.orb.applyRemoteState(state)
+                // mood optional: alte Backend-Stände liefern kein mood →
+                // die App behält die aktuelle Stimmung (Orb lügt nie).
+                self.orb.applyRemote(state: state, mood: obj["mood"] as? String)
             }
         }.resume()
     }
@@ -699,6 +762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveItem: NSMenuItem?
     private var windowLiveItem: NSMenuItem?
     private var stateItems: [NSMenuItem] = []
+    private var moodItems: [NSMenuItem] = []
     private var clickThrough = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -733,6 +797,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statesItem.submenu = statesMenu
         stateItems = statesMenu.items
         menu.addItem(statesItem)
+        // Mood-Untermenü — Stimmung bewusst setzen (wird ans Backend gemeldet,
+        // damit der Orb-Zustand überall konsistent bleibt).
+        let moodMenu = NSMenu()
+        for m in MOOD_ORDER {
+            let item = NSMenuItem(title: moodSpec(m).label, action: #selector(pickMood(_:)), keyEquivalent: "")
+            item.representedObject = m
+            item.target = self
+            moodMenu.addItem(item)
+        }
+        let moodItem = NSMenuItem(title: "Mood", action: nil, keyEquivalent: "")
+        moodItem.submenu = moodMenu
+        moodItems = moodMenu.items
+        menu.addItem(moodItem)
         let liveWin = NSMenuItem(title: "Live folgen", action: #selector(unpinState), keyEquivalent: "")
         liveWin.target = self
         windowLiveItem = liveWin
@@ -758,7 +835,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         orbView.onPinChange = { [weak self] pinned in
             self?.updatePinUI(pinned: pinned)
         }
+        orbView.onMoodChange = { [weak self] _ in
+            self?.updateMoodUI()
+        }
         updatePinUI(pinned: false)
+        updateMoodUI()
         poller = StatusPoller(orb: orbView)
         poller?.start()
         NSLog("[thinking-orb] running — state breathing")
@@ -791,6 +872,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updatePinUI(pinned: true)
         }
     }
+    @objc private func pickMood(_ sender: NSMenuItem) {
+        if let m = sender.representedObject as? String {
+            orbView.setMood(m)
+            updateMoodUI()
+            postMood(m)
+        }
+    }
+    /// Stimmung ans Backend melden (gleicher Loopback wie /status — kein
+    /// Auth, nur 127.0.0.1). Fire-and-forget: das Backend ist die Quelle der
+    /// Wahrheit, der nächste Poll bestätigt den Zustand.
+    private func postMood(_ mood: String) {
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:8799/mood")!, timeoutInterval: 3)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["mood": mood])
+        URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+    }
     @objc private func unpinState() {
         orbView.unpin()
         updatePinUI(pinned: false)
@@ -803,6 +901,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in stateItems {
             let s = item.representedObject as? String
             item.state = pinned && s == orbView.state ? .on : .off
+        }
+    }
+    /// Häkchen am aktiven Mood — der Mood ist nie unsichtbar.
+    private func updateMoodUI() {
+        for item in moodItems {
+            let m = item.representedObject as? String
+            item.state = m == orbView.mood ? .on : .off
         }
     }
     @objc private func setSizeSmall() { resize(40) }

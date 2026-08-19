@@ -13,6 +13,12 @@ Regeln (Review #2, Grok):
   ohne seq werden nur akzeptiert, solange noch nie eine seq gesehen wurde
   (sonst umgeht ein seq-loser Report den Race-Guard).
 - Der Orb lügt nie: ohne gültigen Report bleibt der letzte State bestehen.
+
+Mood-Dimension (2026-08-19): Der Orb zeigt neben der Aktivität auch eine
+bewusste Stimmung (Era-Selbstauskunft). `/mood` ist ein POST auf dem
+Loopback-Server (wie /status: kein Auth, nur 127.0.0.1) — gesetzt von der
+Orb-App (Menü) oder von Era direkt per HTTP. Der Chip-Report (/report)
+fasst den Mood NIE an — nur ein expliziter /mood-Schreib ändert ihn.
 """
 import json
 import threading
@@ -25,9 +31,13 @@ router = APIRouter()
 
 _ALLOWED = {"working", "searching", "solving", "listening", "connecting",
             "weaving", "composing", "breathing", "shaping"}
+# Bewusste Emotionen (Era): nur explizit gesetzt, nie erraten — der Orb
+# lügt nie. Palette + Verhalten: Skill "orb-mood".
+_ALLOWED_MOODS = {"calm", "joyful", "playful", "thoughtful", "shy",
+                  "embarrassed", "annoyed", "aroused"}
 _PORT = 8799
 
-_state = {"state": "breathing", "seq": 0}
+_state = {"state": "breathing", "seq": 0, "mood": "calm"}
 _lock = threading.Lock()
 _bound = False
 _httpd: ThreadingHTTPServer | None = None
@@ -40,8 +50,37 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         with _lock:
-            body = json.dumps({"state": _state["state"]}).encode()
+            body = json.dumps({"state": _state["state"], "mood": _state["mood"]}).encode()
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        # NUR exakt /mood — Stimmung bewusst setzen (Era per HTTP oder App-Menü).
+        # Kein seq-Guard nötig: mood ist kein Rennen, sondern der letzte
+        # bewusste Schreib gewinnt. State-Reports (/report) fassen mood nie an.
+        if self.path != "/mood":
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self._json({"ok": False}, 400)
+            return
+        mood = data.get("mood")
+        if mood not in _ALLOWED_MOODS:
+            self._json({"ok": False}, 400)
+            return
+        with _lock:
+            _state["mood"] = mood
+        self._json({"ok": True})
+
+    def _json(self, obj: dict, code: int = 200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
