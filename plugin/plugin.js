@@ -486,7 +486,10 @@ function OrbCanvas({ size, stateRef }) {
 
 /* ================= chip ================= */
 let _ctx = null
-let _seq = 0
+// Reload-fest: Modul-Globals starten bei jedem Plugin-Reload neu — ein
+// Zähler ab 0 wäre nach jedem Reload kleiner als der Backend-Stand und alle
+// Reports würden als "stale" verworfen (Orb friert ein). Start hoch statt 0.
+let _seq = Date.now() % 1000000000
 
 // Live-Phasen aus Gateway-Events: macht searching/solving/composing/listening
 // automatisch erreichbar, nicht nur working/breathing. Events sind global
@@ -536,10 +539,20 @@ function OrbChip() {
   // Status an das Plugin-Backend melden (→ 127.0.0.1:8799 für die Orb-App).
   // Monotone seq verhindert Out-of-Order-Lügen (Backend übernimmt nur
   // seq >= letzte) — deterministischer als Abort bei unbekanntem signal-Support.
-  useEffect(() => {
+  const report = () => {
     const state = deriveState(gateway, busy, awaiting, phaseState)
     const seq = ++_seq
     _ctx?.rest('/report', { method: 'POST', body: { state, seq } }).catch(() => {})
+  }
+  useEffect(() => {
+    report()
+  }, [busy, awaiting, gateway, phaseTick])
+
+  // Heartbeat: gleicht verschluckte/fehlgeschlagene Reports an — der Orb
+  // darf nie dauerhaft auf einem alten State stehen bleiben.
+  useEffect(() => {
+    const iv = window.setInterval(report, 5000)
+    return () => window.clearInterval(iv)
   }, [busy, awaiting, gateway, phaseTick])
 
   stateRef.current = deriveState(gateway, busy, awaiting, phaseState)

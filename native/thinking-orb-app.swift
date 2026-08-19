@@ -621,6 +621,7 @@ final class OrbView: NSView {
         if pinned { return }
         let mode = STATE_TO_MODE[newState]
         if mode != nil && newState != state {
+            print("[thinking-orb] state \(state) -> \(newState)")
             beginTransition(to: newState)
         }
     }
@@ -650,9 +651,13 @@ final class StatusPoller {
     func start() {
         guard timer == nil else { return }
         generation += 1   // laufende Requests des vorherigen Poller-Lebens invalidiert
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
+        // .common: Menü-Tracking (Rechtsklick-Menü offen) darf den Poll nicht
+        // pausieren — sonst friert der Orb währenddessen ein.
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
         poll()
     }
     deinit { timer?.invalidate() }
@@ -670,7 +675,13 @@ final class StatusPoller {
                       let http = resp as? HTTPURLResponse, http.statusCode == 200,
                       error == nil, let data,
                       let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let state = obj["state"] as? String else { return }
+                      let state = obj["state"] as? String else {
+                    NSLog("[thinking-orb] poll GUARD-FAIL gen=%d code=%d err=%@ data=%d",
+                          gen, (resp as? HTTPURLResponse)?.statusCode ?? -1,
+                          String(describing: error), data?.count ?? -1)
+                    print("[thinking-orb] poll GUARD-FAIL gen=\(gen) code=\((resp as? HTTPURLResponse)?.statusCode ?? -1) data=\(data?.count ?? -1)")
+                    return
+                }
                 self.orb.applyRemoteState(state)
             }
         }.resume()
