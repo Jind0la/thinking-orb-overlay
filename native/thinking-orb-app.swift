@@ -750,6 +750,7 @@ final class StatusPoller {
     private var timer: Timer?
     private let url = URL(string: "http://127.0.0.1:8799/status")!
     private var inFlight = false
+    private var lastPollStart = Date.distantPast
     private var generation = 0
     init(orb: OrbView) { self.orb = orb }
     func start() {
@@ -766,8 +767,19 @@ final class StatusPoller {
     }
     deinit { timer?.invalidate() }
     private func poll() {
-        guard !inFlight else { return }   // kein Overlap → keine Out-of-Order-Lügen
+        if inFlight {
+            // Stuck-Schutz (live gebissen 2026-08-19): hängt ein Request
+            // (z.B. Backend-Neustart genau während des Polls), darf das den
+            // Poller nicht dauerhaft einfrieren — nach 5s wird freigegeben.
+            if Date().timeIntervalSince(lastPollStart) > 5 {
+                print("[thinking-orb] poll STUCK-RECOVERY — inFlight freigegeben")
+                inFlight = false
+            } else {
+                return
+            }
+        }
         inFlight = true
+        lastPollStart = Date()
         let gen = generation
         var req = URLRequest(url: url, timeoutInterval: 3)
         req.httpMethod = "GET"
@@ -974,4 +986,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
+// stdout unbuffered: print() landet sofort im Log (live gebissen 2026-08-19 —
+// blockgepufferte prints machten Debug-Logs unsichtbar, nur NSLog kam durch).
+setbuf(stdout, nil)
 app.run()
