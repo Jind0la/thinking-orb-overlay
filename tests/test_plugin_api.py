@@ -31,11 +31,11 @@ client = TestClient(_app)
 def isolated_backend_state():
     """Jeder Test startet mit bekanntem Zustand — keine Reihenfolge-Lotterie."""
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0, "attention": 0}
         plugin_api._bound = True
     yield
     with plugin_api._lock:
-        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
+        plugin_api._state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0, "attention": 0}
         plugin_api._bound = True
 
 
@@ -150,11 +150,11 @@ def test_mood_set_and_status_includes_mood():
     try:
         # Status enthält mood (Default calm)
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm", "attention": 0}
         code, body = _post(base, "/mood", {"mood": "shy"})
         assert code == 200 and body == {"ok": True}
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "shy"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "shy", "attention": 0}
     finally:
         server.shutdown()
         server.server_close()
@@ -228,7 +228,7 @@ def test_mood_decays_after_timeout():
             plugin_api._state["mood"] = "shy"
             plugin_api._state["mood_set_at"] = _t.time() - plugin_api._MOOD_TIMEOUTS["shy"] - 10
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm", "attention": 0}
     finally:
         server.shutdown()
         server.server_close()
@@ -243,7 +243,7 @@ def test_mood_keeps_within_timeout():
             plugin_api._state["mood"] = "joyful"
             plugin_api._state["mood_set_at"] = _t.time() - 60  # 12min-Timeout, 1min alt
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "joyful"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "joyful", "attention": 0}
     finally:
         server.shutdown()
         server.server_close()
@@ -261,7 +261,7 @@ def test_mood_repost_refreshes_timer():
         code, _ = _post(base, "/mood", {"mood": "aroused"})
         assert code == 200
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "aroused"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "aroused", "attention": 0}
     finally:
         server.shutdown()
         server.server_close()
@@ -276,7 +276,53 @@ def test_calm_has_no_timeout():
             plugin_api._state["mood"] = "calm"
             plugin_api._state["mood_set_at"] = _t.time() - 99999
         with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
-            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm"}
+            assert json.loads(resp.read()) == {"state": "breathing", "mood": "calm", "attention": 0}
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- Attention-Signal (Antwort final geschrieben, 2026-08-19) ---
+
+
+def test_report_with_attention_reaches_status():
+    """attention aus /report landet im /status — die App pulst nur bei Änderung."""
+    r = client.post("/report", json={"state": "breathing", "seq": 1, "attention": 1234567890123})
+    assert r.status_code == 200
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 1234567890123
+    server, base = _mood_server()
+    try:
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert json.loads(resp.read())["attention"] == 1234567890123
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_report_without_attention_keeps_last():
+    """Heartbeat-/State-Reports ohne attention lassen den letzten Wert bestehen."""
+    client.post("/report", json={"state": "working", "seq": 1, "attention": 42})
+    r = client.post("/report", json={"state": "breathing", "seq": 2})
+    assert r.status_code == 200
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 42
+
+
+def test_report_nonpositive_attention_ignored():
+    """0/negatives attention ist kein Signal — wird nie übernommen."""
+    client.post("/report", json={"state": "working", "seq": 1, "attention": 0})
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 0
+    client.post("/report", json={"state": "breathing", "seq": 2, "attention": -5})
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 0
+
+
+def test_stale_report_does_not_touch_attention():
+    """Out-of-Order-Report (503) darf attention nicht überschreiben."""
+    client.post("/report", json={"state": "breathing", "seq": 10, "attention": 99})
+    r = client.post("/report", json={"state": "working", "seq": 5, "attention": 777})
+    assert r.status_code == 503
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 99

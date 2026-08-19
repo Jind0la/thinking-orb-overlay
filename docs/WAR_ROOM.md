@@ -1,6 +1,6 @@
 # 13-thinking-orb-overlay — WAR ROOM
 
-Stand: 2026-08-19 (Abend — Mood-Dimension)
+Stand: 2026-08-19 (Abend — Mood-Dimension + Attention-Pulse)
 
 ## Zweck
 
@@ -48,8 +48,13 @@ dich repräsentieren").
 - [x] **Live-Test bestanden**: `{"state":"working"}` während Agent busy — Kette läuft Ende-zu-Ende
 - [x] **Mood-Dimension**: Backend `/mood` + mood in `/status`, App-Farben/Speed/Puls/Menü, Tests (12 passed), Build+Sign OK, App neu gestartet (PID läuft)
 - [x] Skill `orb-mood` angelegt (Palette + Verhalten)
-- [ ] **Cmd+Q der Desktop-App** — Backend lädt den neuen `/mood`-Handler erst nach Neustart (Discovery-Cache; vorher: POST /mood → 501, /status ohne mood)
-- [ ] Push GitHub (Branch `feat/overlay-app`)
+- [x] **Attention-Pulse** (2026-08-19): Chip meldet message.complete →
+  weicher Glow-Halo in der App (Branch feat/attention-pulse, Tests 20
+  passed, Build+Sign OK, App läuft)
+- [ ] **Cmd+Q der Desktop-App** — Backend lädt `/mood` + `attention` erst
+  nach Neustart (Discovery-Cache; vorher: POST /mood → 501, /status ohne
+  mood/attention)
+- [ ] Push GitHub (Branch `feat/attention-pulse`, enthält feat/overlay-app)
 
 ## Erkenntnisse 2026-08-19 (Build-Lauf)
 
@@ -81,6 +86,23 @@ dich repräsentieren").
   `cp plugin/dashboard/plugin_api.py ~/.hermes/plugins/...` (+ `__pycache__`
   löschen), DANN Cmd+Q. Symptom sonst: /status ohne mood, POST /mood 501.
 - `send_error(404)` liefert HTML — Test-Helper parst JSON tolerant.
+
+## Erkenntnisse 2026-08-19 (Attention-Pulse)
+
+- Trigger: `message.complete` = Antwort final geschrieben. Der Chip hängt
+  genau DIESEM Report einen einmaligen attention-Timestamp an
+  (answerDone-Flag verbraucht sich); Heartbeat/State-Reports senden kein
+  attention → Backend behält den letzten Wert → App pulst nur bei Änderung.
+- App-Guard: Pulse nur wenn attention frisch (<8s) UND != letzter Wert —
+  App-Start/Backend-Neustart lösen keinen Geister-Pulse aus.
+- Effekt: weicher Glow-Halo HINTER den Partikeln (radialer Gradient in
+  Mood-Farbe), 2,4s, Smoothstep auf/ab, max 30% Alpha. State unangetastet
+  (Orb lügt nie); auch bei gepinntem State live.
+- `/status` liefert attention erst nach Cmd+Q (Discovery-Cache) — der
+  Live-Test ist die nächste final geschriebene Antwort.
+- main steht auf 12:33 (Merge); Feature-Arbeit (Mood, Poller-Fixes,
+  Attention) lebt auf feat/overlay-app → feat/attention-pulse. Erst nach
+  Review + Nimar-OK mergen.
 
 ## Gaps / Bekannte Grenzen
 

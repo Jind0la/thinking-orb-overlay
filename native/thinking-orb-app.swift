@@ -544,6 +544,13 @@ final class OrbView: NSView {
     private var moodTo: MoodSpec = moodSpec("calm")
     private var moodT: Double = 1.0   // 1 = Übergang fertig
 
+    // Attention-Pulse (dezentes „Antwort fertig geschrieben“-Signal): ein
+    // weicher Glow-Halo, der mit der Smoothstep-Kurve auf- und abblendet.
+    // Berührt den State nie — der Orb lügt nicht, er macht nur aufmerksam.
+    private var lastAttention = 0.0
+    private var attentionT = 1.0   // 1 = kein Pulse aktiv
+    private let attentionDuration = 2.4
+
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
     private var fromDots: [Dot] = []
@@ -571,6 +578,9 @@ final class OrbView: NSView {
         }
         if moodT < 1 {
             moodT = min(1, moodT + 1.0 / 60.0 / transitionDuration)
+        }
+        if attentionT < 1 {
+            attentionT = min(1, attentionT + 1.0 / 60.0 / attentionDuration)
         }
         needsDisplay = true
     }
@@ -603,6 +613,23 @@ final class OrbView: NSView {
     }
     private func smoothStep(_ x: Double) -> Double { x * x * (3 - 2 * x) }
 
+    /// Weicher Halo hinter dem Orb — der Attention-Pulse. Blendet mit der
+    /// gleichen Smoothstep-Kurve wie State-/Mood-Morph auf und ab, in
+    /// Mood-Farbe. Dezent: max. 30% Alpha, ~2,4s. Der State bleibt
+    /// unangetastet — der Orb meldet nur „Era hat geantwortet“.
+    private func drawAttentionGlow(_ ctx: CGContext, size: Double, m: MoodSpec) {
+        let env = attentionT < 0.5 ? smoothStep(attentionT * 2) : smoothStep((1 - attentionT) * 2)
+        let base = NSColor(hue: m.hue / 360, saturation: m.sat, brightness: 0.95, alpha: 1).cgColor
+        guard let inner = base.copy(alpha: 0.30 * env),
+              let outer = base.copy(alpha: 0.0),
+              let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                    colors: [inner, outer] as CFArray,
+                                    locations: [0.45, 1.0]) else { return }
+        let c = CGPoint(x: size / 2, y: size / 2)
+        ctx.drawRadialGradient(grad, startCenter: c, startRadius: 0,
+                               endCenter: c, endRadius: CGFloat(size * 0.6), options: [])
+    }
+
     /// State wechseln MIT Morph-Übergang (Snapshots + Interpolation).
     private func beginTransition(to newState: String) {
         let size = Double(bounds.width)
@@ -629,6 +656,12 @@ final class OrbView: NSView {
         let pulse = 1 + m.pulseAmp * sin(t * m.pulseFreq)
         for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse }
         for i in frame.lines.indices { frame.lines[i].w *= m.scale }
+
+        // Attention-Halo VOR den Partikeln (hinter dem Orb) — leuchtet durch
+        // die Punktewolke hindurch, ohne sie zu übermalen.
+        if attentionT < 1 {
+            drawAttentionGlow(ctx, size: size, m: m)
+        }
 
         if transitionT < 1 {
             let ease = smoothStep(transitionT)
@@ -699,7 +732,10 @@ final class OrbView: NSView {
         }
     }
     /// Wird vom Poller aufgerufen, wenn das Backend State + Mood meldet.
-    func applyRemote(state newState: String, mood newMood: String?) {
+    func applyRemote(state newState: String, mood newMood: String?, attention: Double?) {
+        // Attention zuerst — auch bei gepinntem State bleibt der Pulse live
+        // (Pin sperrt nur die Aktivitäts-Darstellung, nicht das Signal).
+        if let attention { applyAttention(attention) }
         // Mood zuerst — auch bei gepinntem State bleibt die Stimmung live
         // (Pin sperrt nur die Aktivitäts-Darstellung, nicht die Emotion).
         if let newMood, MOODS[newMood] != nil, newMood != mood {
@@ -714,6 +750,16 @@ final class OrbView: NSView {
             print("[thinking-orb] state \(state) -> \(newState)")
             beginTransition(to: newState)
         }
+    }
+    /// Dezentes Aufmerksamkeits-Signal (Chip meldet message.complete): nur
+    /// neue, frische Timestamps pulsen — Wiederholungen und alte Werte
+    /// (App-Start, Backend-Neustart) werden ignoriert.
+    private func applyAttention(_ ts: Double) {
+        guard ts > 0, ts != lastAttention,
+              Date().timeIntervalSince1970 * 1000 - ts < 8000 else { return }
+        lastAttention = ts
+        attentionT = 0
+        print("[thinking-orb] attention pulse")
     }
     /// Manuelles Setzen (Menü) — pinnt bis „Live folgen".
     func setState(_ newState: String) {
@@ -798,9 +844,10 @@ final class StatusPoller {
                     print("[thinking-orb] poll GUARD-FAIL gen=\(gen) code=\((resp as? HTTPURLResponse)?.statusCode ?? -1) data=\(data?.count ?? -1)")
                     return
                 }
-                // mood optional: alte Backend-Stände liefern kein mood →
-                // die App behält die aktuelle Stimmung (Orb lügt nie).
-                self.orb.applyRemote(state: state, mood: obj["mood"] as? String)
+                // mood/attention optional: alte Backend-Stände liefern sie
+                // nicht → die App behält den Zustand (Orb lügt nie).
+                self.orb.applyRemote(state: state, mood: obj["mood"] as? String,
+                                     attention: (obj["attention"] as? NSNumber)?.doubleValue)
             }
         }.resume()
     }

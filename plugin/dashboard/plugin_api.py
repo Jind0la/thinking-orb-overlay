@@ -60,7 +60,7 @@ _MOOD_TIMEOUTS = {
 }
 _PORT = 8799
 
-_state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0}
+_state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0, "attention": 0}
 _lock = threading.Lock()
 _bound = False
 _httpd: ThreadingHTTPServer | None = None
@@ -87,7 +87,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         with _lock:
             _decay_mood()
-            body = json.dumps({"state": _state["state"], "mood": _state["mood"]}).encode()
+            body = json.dumps({"state": _state["state"], "mood": _state["mood"],
+                               "attention": _state["attention"]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -179,4 +180,10 @@ async def report(request: Request):
         else:
             _state["seq"] = seq
         _state["state"] = state
+        # Attention-Signal (Antwort final geschrieben, vom Chip): nur positive
+        # Werte übernehmen. Heartbeat-/State-Reports ohne attention lassen den
+        # letzten Wert bestehen — die App pulst nur bei Änderung.
+        att = data.get("attention")
+        if isinstance(att, (int, float)) and att > 0:
+            _state["attention"] = att
     return {"ok": True}
