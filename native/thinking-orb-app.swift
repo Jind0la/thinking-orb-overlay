@@ -643,6 +643,7 @@ final class StatusPoller {
     init(orb: OrbView) { self.orb = orb }
     func start() {
         guard timer == nil else { return }
+        generation += 1   // laufende Requests des vorherigen Poller-Lebens invalidiert
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -718,9 +719,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
         menu.addItem(NSMenuItem.separator())
-        let ct = NSMenuItem(title: "Durchklickbar", action: #selector(toggleClickThrough), keyEquivalent: "")
-        ct.target = self
-        menu.addItem(ct)
+        let ctWin = NSMenuItem(title: "Durchklickbar", action: #selector(toggleClickThrough), keyEquivalent: "")
+        ctWin.target = self
+        clickThroughItem = ctWin
+        menu.addItem(ctWin)
         let quit = NSMenuItem(title: "Beenden", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         orbView.menu = menu

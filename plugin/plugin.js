@@ -1,7 +1,6 @@
 /* thinking-orb — live agent-status orb for the Hermes status bar.
- * Port of jakubantalik/thinking-orbs engine (MIT) — see LICENSE note below.
- * State: busy -> working · idle -> breathing · manual override via popover.
- */
+ * Port of jakubantalik/thinking-orbs engine (MIT) — see NOTICE.
+ * State from host.state + gateway events (busy/tools/reasoning/streaming). */
 import { jsx } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
 import { useValue, host } from '@hermes/plugin-sdk'

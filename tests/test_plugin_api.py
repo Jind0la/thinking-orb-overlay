@@ -3,10 +3,15 @@
 Lauf:  uv run --with "pytest httpx fastapi" pytest tests/ -q
 Hinweis: Der Modul-Import startet den Loopback-Thread (Import-Side-Effect,
 bewusst). Im Testkontext ist der Port 8799 evtl. vom echten Backend belegt —
-der Thread scheitert dann still (Bind-Fehler-Log) und _bound bleibt False;
-die Route-Tests setzen _bound gezielt, der 503-Fall wird explizit getestet.
+der Thread scheitert dann still (Bind-Fehler-Log). Die Route-Tests setzen
+_bound gezielt; eine Autouse-Fixture isoliert _state/_seq/_bound zwischen
+den Tests (Definitionsreihenfolge-unabhängig).
 """
 import sys
+import threading
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -16,14 +21,24 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugin" / "dashboard"))
 import plugin_api  # noqa: E402
 
-# TestClient braucht eine echte App (Middleware-Stack), kein nacktes Router-Objekt
 _app = FastAPI()
 _app.include_router(plugin_api.router)
 client = TestClient(_app)
 
 
+@pytest.fixture(autouse=True)
+def isolated_backend_state():
+    """Jeder Test startet mit bekanntem Zustand — keine Reihenfolge-Lotterie."""
+    with plugin_api._lock:
+        plugin_api._state = {"state": "breathing", "seq": 0}
+        plugin_api._bound = True
+    yield
+    with plugin_api._lock:
+        plugin_api._state = {"state": "breathing", "seq": 0}
+        plugin_api._bound = True
+
+
 def test_report_valid_state():
-    plugin_api._bound = True
     r = client.post("/report", json={"state": "working", "seq": 1})
     assert r.status_code == 200
     assert r.json() == {"ok": True}
@@ -33,49 +48,71 @@ def test_report_valid_state():
 
 
 def test_report_invalid_state_rejected():
-    plugin_api._bound = True
     r = client.post("/report", json={"state": "dancing", "seq": 2})
+    assert r.status_code == 400
     assert r.json() == {"ok": False}
     with plugin_api._lock:
-        assert plugin_api._state["state"] == "working"  # unverändert
+        assert plugin_api._state["state"] == "breathing"  # unverändert
 
 
 def test_report_invalid_json_rejected():
-    plugin_api._bound = True
     r = client.post("/report", data="kein json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
     assert r.json() == {"ok": False}
 
 
-def test_report_stale_seq_dropped():
-    """Out-of-Order: ältere seq darf den neueren State nicht überschreiben."""
-    plugin_api._bound = True
+def test_report_stale_seq_is_hard_503():
+    """Out-of-Order: ältere seq → hart 503 (Vertrag AGENTS.md), State bleibt."""
     with plugin_api._lock:
         plugin_api._state["state"] = "breathing"
         plugin_api._state["seq"] = 10
     r = client.post("/report", json={"state": "working", "seq": 5})
+    assert r.status_code == 503
     assert r.json() == {"ok": False, "error": "stale"}
     with plugin_api._lock:
         assert plugin_api._state["state"] == "breathing"
 
 
-def test_report_without_seq_still_accepted():
-    """Ohne seq (ältere Chips) weiter akzeptieren — sequenzlos ist kein
-    Out-of-Order-Kriterium vorhanden, der Wert wird trotzdem übernommen."""
-    plugin_api._bound = True
+def test_report_without_seq_compat_window():
+    """Alte Chips ohne seq: nur solange nie eine seq gesehen wurde."""
     r = client.post("/report", json={"state": "connecting"})
+    assert r.status_code == 200
     assert r.json() == {"ok": True}
-    with plugin_api._lock:
-        assert plugin_api._state["state"] == "connecting"
+    # Sobald eine seq da ist, darf ein seq-loser Report den Guard nicht brechen
+    client.post("/report", json={"state": "working", "seq": 1})
+    r = client.post("/report", json={"state": "breathing"})
+    assert r.status_code == 503
+    assert r.json() == {"ok": False, "error": "stale"}
 
 
 def test_report_503_when_not_bound():
-    """Bind-Fail muss HART sichtbar sein — kein stilles Lügen."""
+    """Bind-Fail muss HART 503 sein — kein stilles Lügen."""
     plugin_api._bound = False
     r = client.post("/report", json={"state": "working", "seq": 99})
+    assert r.status_code == 503
     assert r.json() == {"ok": False, "error": "loopback not bound"}
-    plugin_api._bound = True  # aufräumen für weitere Tests
 
 
-# Die GET-Pfadprüfung (/status vs. 404 sonst) wird live verifiziert:
-#   curl -s http://127.0.0.1:8799/status   → 200
-#   curl -s http://127.0.0.1:8799/whatever → 404
+def test_loopback_get_path_restriction():
+    """GET-Pfadprüfung gegen einen echten ephemeren Server (Port 0):
+    /status → 200, alles andere → 404, Query-String leakt keinen Status."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), plugin_api._Handler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        with urllib.request.urlopen(f"{base}/status", timeout=3) as resp:
+            assert resp.status == 200
+            import json
+            assert json.loads(resp.read())["state"] == plugin_api._state["state"]
+        # andere Pfade → 404
+        for path in ("/whatever", "/status/", "/status?x=1"):
+            try:
+                urllib.request.urlopen(f"{base}{path}", timeout=3)
+                raise AssertionError(f"{path} hätte 404 geben müssen")
+            except urllib.error.HTTPError as e:
+                assert e.code == 404, f"{path} → {e.code}"
+    finally:
+        server.shutdown()
+        server.server_close()
