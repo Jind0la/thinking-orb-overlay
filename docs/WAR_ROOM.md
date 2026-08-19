@@ -49,8 +49,9 @@ dich repräsentieren").
 - [x] **Mood-Dimension**: Backend `/mood` + mood in `/status`, App-Farben/Speed/Puls/Menü, Tests (12 passed), Build+Sign OK, App neu gestartet (PID läuft)
 - [x] Skill `orb-mood` angelegt (Palette + Verhalten)
 - [x] **Attention-Pulse** (2026-08-19): Chip meldet message.complete →
-  weicher Glow-Halo in der App (Branch feat/attention-pulse, Tests 20
-  passed, Build+Sign OK, App läuft)
+  Atem-Signal: Partikel atmen + Farbverlauf rotiert im Uhrzeigersinn
+  (im Glow-Lab iteriert, User-Einstellungen übernommen; Tests 20 passed,
+  Build+Sign OK, App läuft)
 - [ ] **Cmd+Q der Desktop-App** — Backend lädt `/mood` + `attention` erst
   nach Neustart (Discovery-Cache; vorher: POST /mood → 501, /status ohne
   mood/attention)
@@ -95,9 +96,16 @@ dich repräsentieren").
   attention → Backend behält den letzten Wert → App pulst nur bei Änderung.
 - App-Guard: Pulse nur wenn attention frisch (<8s) UND != letzter Wert —
   App-Start/Backend-Neustart lösen keinen Geister-Pulse aus.
-- Effekt: weicher Glow-Halo HINTER den Partikeln (radialer Gradient in
-  Mood-Farbe), 2,4s, Smoothstep auf/ab, max 30% Alpha. State unangetastet
-  (Orb lügt nie); auch bei gepinntem State live.
+- Effekt (Glow-Lab-iteriert bis User-OK, „So übernehmen“): Atem-Kurve
+  rein -3.6×amp (46%) / raus +2.4×amp (136%) bei 15% Amplitude, Dauer
+  2,8s; Farbverlauf rotiert einmal im Uhrzeigersinn (hue = Winkel - p·2π,
+  Boost +0.18·env); Fenster 1.5× Orb mit transparentem Rand (kein
+  Box-Rand-Schnitt — live gebissen: „Ränder der Box“ beim Glow).
+  **Skalierung wirkt auf Position + Radius** (nur Radien = unsichtbar,
+  live gebissen: „Atem sehe ich garnicht“). Glow-Gradient verworfen
+  (User: „zu platt“ — no-filters-Prinzip des Orb-Entwicklers).
+- Swift/CG-Pitfall: `ctx.save()`/`restore()` existieren nicht — es sind
+  `saveGState()`/`restoreGState()` (Build-Fehler live gefixt).
 - `/status` liefert attention erst nach Cmd+Q (Discovery-Cache) — der
   Live-Test ist die nächste final geschriebene Antwort.
 - main steht auf 12:33 (Merge); Feature-Arbeit (Mood, Poller-Fixes,

@@ -544,12 +544,20 @@ final class OrbView: NSView {
     private var moodTo: MoodSpec = moodSpec("calm")
     private var moodT: Double = 1.0   // 1 = Übergang fertig
 
-    // Attention-Pulse (dezentes „Antwort fertig geschrieben“-Signal): ein
-    // weicher Glow-Halo, der mit der Smoothstep-Kurve auf- und abblendet.
-    // Berührt den State nie — der Orb lügt nicht, er macht nur aufmerksam.
+    // Attention-Pulse (dezentes „Antwort fertig geschrieben“-Signal):
+    // die Partikel atmen (rein/raus) und der Farbverlauf wandert einmal
+    // im Uhrzeigersinn um den Orb. Parameter im Glow-Lab abgenommen
+    // (User-Einstellungen: Dauer 2,8s, Amplitude 15%).
     private var lastAttention = 0.0
     private var attentionT = 1.0   // 1 = kein Pulse aktiv
-    private let attentionDuration = 3.0
+    private let attentionDuration = 2.8
+
+    /// Orb-Zeichengröße + transparenter Rand: das Fenster ist 1.5× so groß
+    /// wie der Orb, damit der Atem-Ausschlag (+36% bei 15% Amplitude)
+    /// nicht an der Box-Kante abgeschnitten wird (live gebissen: „Ränder
+    /// der Box“ beim Glow).
+    private var orbSize: Double { Double(bounds.width) * 2.0 / 3.0 }
+    private var orbPad: Double { Double(bounds.width) / 6.0 }
 
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
@@ -618,26 +626,38 @@ final class OrbView: NSView {
         attentionT < 0.5 ? smoothStep(attentionT * 2) : smoothStep((1 - attentionT) * 2)
     }
 
-    /// Weicher Halo hinter dem Orb — der Attention-Pulse. Blendet mit der
-    /// gleichen Smoothstep-Kurve wie State-/Mood-Morph auf und ab, in
-    /// Mood-Farbe. Nach User-Feedback („kaum bemerkt“) nachjustiert:
-    /// 60% Alpha, größerer Radius, ~3s. Der State bleibt unangetastet —
-    /// der Orb meldet nur „Era hat geantwortet“.
-    private func drawAttentionGlow(_ ctx: CGContext, size: Double, m: MoodSpec, env: Double) {
-        let base = NSColor(hue: m.hue / 360, saturation: m.sat, brightness: 0.95, alpha: 1).cgColor
-        guard let inner = base.copy(alpha: 0.60 * env),
-              let outer = base.copy(alpha: 0.0),
-              let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                    colors: [inner, outer] as CFArray,
-                                    locations: [0.35, 1.0]) else { return }
-        let c = CGPoint(x: size / 2, y: size / 2)
-        ctx.drawRadialGradient(grad, startCenter: c, startRadius: 0,
-                               endCenter: c, endRadius: CGFloat(size * 0.72), options: [])
+    /// Atem-Kurve (im Glow-Lab abgenommen, User: „So übernehmen“): erst
+    /// stark nach INNEN zusammenziehen (-3.6×amp → 46% bei 15%), dann
+    /// kräftig nach AUSSEN aufpusten (+2.4×amp → 136%), weich zurück.
+    private func breathScale(_ p: Double) -> Double {
+        let amp = 0.15   // Atem-Amplitude 15% (User-Einstellung)
+        if p < 0.3 { return 1 - 3.6 * amp * smoothStep(p / 0.3) }
+        if p < 0.6 { return 1 - 3.6 * amp + 6.0 * amp * smoothStep((p - 0.3) / 0.3) }
+        return 1 + 2.4 * amp - 2.4 * amp * smoothStep((p - 0.6) / 0.4)
+    }
+
+    /// Partikel mit Atem-Signal: der Farbverlauf wandert einmal im
+    /// Uhrzeigersinn um den Orb (alle Farben, rot = p·2π) und die
+    /// Partikel leuchten dabei heller auf (+0.18·env). NSColor(hue:)
+    /// erwartet 0-1, nicht Grad (orb-mood-Pitfall).
+    private func paintSignal(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool, m: MoodSpec, rot: Double, env: Double, cx: Double, cy: Double) {
+        for d in dots {
+            let w = min(1, max(0, d.white))
+            let dx = d.x - cx, dy = d.y - cy
+            let ang = atan2(dy, dx) - rot
+            var hn = ((ang / (2 * Double.pi)) + 0.5).truncatingRemainder(dividingBy: 1)
+            if hn < 0 { hn += 1 }
+            let hueP = hn * 360
+            let satP = min(1, m.sat + 0.2)
+            let b = min(1, (dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w) + 0.18 * env)
+            ctx.setFillColor(NSColor(hue: hueP / 360, saturation: satP, brightness: b, alpha: d.a).cgColor)
+            ctx.fillEllipse(in: CGRect(x: d.x - d.r, y: d.y - d.r, width: d.r * 2, height: d.r * 2))
+        }
     }
 
     /// State wechseln MIT Morph-Übergang (Snapshots + Interpolation).
     private func beginTransition(to newState: String) {
-        let size = Double(bounds.width)
+        let size = orbSize
         let oldFrame = FRAMES[resolved.mode]!(size, t, resolved.opts)
         fromDots = oldFrame.dots.sorted { angleOf($0) < angleOf($1) }
         fromLines = oldFrame.lines
@@ -650,28 +670,42 @@ final class OrbView: NSView {
     override var isFlipped: Bool { true }   // NSView-y nach unten → nicht gespiegelt
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let size = Double(bounds.width)
+        let size = orbSize
+        let pad = orbPad
         guard size > 0 else { return }
         ctx.clear(bounds)
         let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // Transparenter Fensterrand: der Orb wird zentriert gezeichnet,
+        // der Atem-Ausschlag kann in den Rand auslaufen (keine Box-Kante).
+        ctx.saveGState()
+        ctx.translateBy(x: pad, y: pad)
         var frame = FRAMES[resolved.mode]!(size, t, resolved.opts)
         // Mood-Dynamik: Orb-Größe (scale) + Puls auf den Partikelradien —
         // aufgeregt schwillt der Orb leicht, schüchtern zieht er sich zurück.
         let m = currentMoodSpec()
         let pulse = 1 + m.pulseAmp * sin(t * m.pulseFreq)
-        // Attention-Pulse pustet den Orb zusätzlich kurz auf (~7%) — der
-        // reine Glow war zu dezent (User: „kaum bemerkt“).
-        let attEnv = attentionEnv()
-        let attScale = 1 + 0.07 * attEnv
-        for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse * attScale }
+        // Atem-Signal (im Glow-Lab abgenommen): Position + Radius der
+        // Partikel atmen (rein -54%, raus +36% bei 15% Amplitude).
+        let attScale: Double
+        let rot: Double
+        if attentionT < 1 {
+            attScale = breathScale(attentionT)
+            rot = attentionT * 2 * Double.pi   // Farbverlauf: 1 Umdrehung
+        } else {
+            attScale = 1
+            rot = 0
+        }
+        let cx = size / 2, cy = size / 2
+        for i in frame.dots.indices {
+            let d = frame.dots[i]
+            frame.dots[i].r *= m.scale * pulse * attScale
+            frame.dots[i].x = cx + (d.x - cx) * attScale
+            frame.dots[i].y = cy + (d.y - cy) * attScale
+        }
         for i in frame.lines.indices { frame.lines[i].w *= m.scale * attScale }
 
-        // Attention-Halo VOR den Partikeln (hinter dem Orb) — leuchtet durch
-        // die Punktewolke hindurch, ohne sie zu übermalen.
-        if attentionT < 1 {
-            drawAttentionGlow(ctx, size: size, m: m, env: attEnv)
-        }
-
+        let signalActive = attentionT < 1
+        let env = signalActive ? attentionEnv() : 0
         if transitionT < 1 {
             let ease = smoothStep(transitionT)
             // Alte Linien blenden aus, neue ein
@@ -684,7 +718,6 @@ final class OrbView: NSView {
             // Punkte: indexweise per Winkel-Sortierung paaren; neue Punkte
             // ohne Partner wachsen aus dem Zentrum (alpha 0 → 1)
             let toDots = frame.dots.sorted { angleOf($0) < angleOf($1) }
-            let cx = size / 2, cy = size / 2
             var morphed: [Dot] = []
             morphed.reserveCapacity(toDots.count)
             for (i, d) in toDots.enumerated() {
@@ -701,11 +734,20 @@ final class OrbView: NSView {
                                    white: lerp(from.white, d.white, ease),
                                    a: lerp(from.a, d.a, ease)))
             }
-            paint(ctx, morphed, appearance, m: m)
+            if signalActive && env > 0.001 {
+                paintSignal(ctx, morphed, appearance, m: m, rot: rot, env: env, cx: cx, cy: cy)
+            } else {
+                paint(ctx, morphed, appearance, m: m)
+            }
         } else {
             if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance, m: m) }
-            paint(ctx, frame.dots, appearance, m: m)
+            if signalActive && env > 0.001 {
+                paintSignal(ctx, frame.dots, appearance, m: m, rot: rot, env: env, cx: cx, cy: cy)
+            } else {
+                paint(ctx, frame.dots, appearance, m: m)
+            }
         }
+        ctx.restoreGState()
     }
     private func paintOneLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, alphaMul: Double, m: MoodSpec) {
         let w = min(1, max(0, l.white))
@@ -879,7 +921,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let size: CGFloat = 96
-        let rect = NSRect(x: 0, y: 0, width: size, height: size)
+        // Fenster mit transparentem Rand (1.5× Orb): der Atem-Ausschlag
+        // (+36%) braucht Auslauf, sonst schneidet die Box-Kante das Signal
+        // ab (live gebissen beim Glow: „Ränder der Box“).
+        let rect = NSRect(x: 0, y: 0, width: size * 1.5, height: size * 1.5)
         window = NSWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -888,7 +933,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.setFrameOrigin(NSPoint(x: NSScreen.main!.frame.maxX - size - 24, y: NSScreen.main!.frame.maxY - size - 60))
+        window.setFrameOrigin(NSPoint(x: NSScreen.main!.frame.maxX - size * 1.5 - 24, y: NSScreen.main!.frame.maxY - size * 1.5 - 60))
 
         orbView = OrbView(frame: rect)
         orbView.state = "breathing"
@@ -1026,9 +1071,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func setSizeLarge() { resize(160) }
     private func resize(_ s: CGFloat) {
         var f = window.frame
-        f.size = NSSize(width: s, height: s)
+        f.size = NSSize(width: s * 1.5, height: s * 1.5)
         window.setFrame(f, display: true)
-        orbView.frame = NSRect(x: 0, y: 0, width: s, height: s)
+        orbView.frame = NSRect(x: 0, y: 0, width: s * 1.5, height: s * 1.5)
     }
     @objc private func toggleClickThrough() {
         clickThrough.toggle()
