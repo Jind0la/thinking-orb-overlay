@@ -65,8 +65,13 @@ dich repräsentieren").
   hue=218 Grad → mod 1 = 0 → Rot statt Blau; Orb wirkte auf dunklem Grund
   schwarz. Fix `hue/360` — von Nimar visuell bestätigt („jetzt passt die
   Farbe").
-- **/mood ohne seq-Guard** (bewusst): mood ist kein Rennen, letzter bewusster
+- `/mood` ohne seq-Guard (bewusst): mood ist kein Rennen, letzter bewusster
   Schreib gewinnt; state-Reports dürfen mood nie überschreiben (getestet).
+- **Backend-Änderung = Kopie spiegeln + Cmd+Q** (live gebissen 2026-08-19):
+  `~/.hermes/plugins/thinking-orb/dashboard/plugin_api.py` ist eine KOPIE —
+  nur Repo patchen reicht nicht, der serve-Prozess lädt die Kopie. Erst
+  `cp plugin/dashboard/plugin_api.py ~/.hermes/plugins/...` (+ `__pycache__`
+  löschen), DANN Cmd+Q. Symptom sonst: /status ohne mood, POST /mood 501.
 - `send_error(404)` liefert HTML — Test-Helper parst JSON tolerant.
 
 ## Gaps / Bekannte Grenzen
