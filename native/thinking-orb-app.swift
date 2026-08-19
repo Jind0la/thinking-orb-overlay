@@ -549,7 +549,7 @@ final class OrbView: NSView {
     // Berührt den State nie — der Orb lügt nicht, er macht nur aufmerksam.
     private var lastAttention = 0.0
     private var attentionT = 1.0   // 1 = kein Pulse aktiv
-    private let attentionDuration = 2.4
+    private let attentionDuration = 3.0
 
     // State-Transition (Morph): alter State wird als Snapshot eingefroren und
     // die Punkte interpolieren weich zu den Positionen des neuen State.
@@ -613,21 +613,26 @@ final class OrbView: NSView {
     }
     private func smoothStep(_ x: Double) -> Double { x * x * (3 - 2 * x) }
 
+    /// Auf-/Abblend-Kurve des Attention-Pulses (0 → 1 → 0).
+    private func attentionEnv() -> Double {
+        attentionT < 0.5 ? smoothStep(attentionT * 2) : smoothStep((1 - attentionT) * 2)
+    }
+
     /// Weicher Halo hinter dem Orb — der Attention-Pulse. Blendet mit der
     /// gleichen Smoothstep-Kurve wie State-/Mood-Morph auf und ab, in
-    /// Mood-Farbe. Dezent: max. 30% Alpha, ~2,4s. Der State bleibt
-    /// unangetastet — der Orb meldet nur „Era hat geantwortet“.
-    private func drawAttentionGlow(_ ctx: CGContext, size: Double, m: MoodSpec) {
-        let env = attentionT < 0.5 ? smoothStep(attentionT * 2) : smoothStep((1 - attentionT) * 2)
+    /// Mood-Farbe. Nach User-Feedback („kaum bemerkt“) nachjustiert:
+    /// 60% Alpha, größerer Radius, ~3s. Der State bleibt unangetastet —
+    /// der Orb meldet nur „Era hat geantwortet“.
+    private func drawAttentionGlow(_ ctx: CGContext, size: Double, m: MoodSpec, env: Double) {
         let base = NSColor(hue: m.hue / 360, saturation: m.sat, brightness: 0.95, alpha: 1).cgColor
-        guard let inner = base.copy(alpha: 0.30 * env),
+        guard let inner = base.copy(alpha: 0.60 * env),
               let outer = base.copy(alpha: 0.0),
               let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                     colors: [inner, outer] as CFArray,
-                                    locations: [0.45, 1.0]) else { return }
+                                    locations: [0.35, 1.0]) else { return }
         let c = CGPoint(x: size / 2, y: size / 2)
         ctx.drawRadialGradient(grad, startCenter: c, startRadius: 0,
-                               endCenter: c, endRadius: CGFloat(size * 0.6), options: [])
+                               endCenter: c, endRadius: CGFloat(size * 0.72), options: [])
     }
 
     /// State wechseln MIT Morph-Übergang (Snapshots + Interpolation).
@@ -654,13 +659,17 @@ final class OrbView: NSView {
         // aufgeregt schwillt der Orb leicht, schüchtern zieht er sich zurück.
         let m = currentMoodSpec()
         let pulse = 1 + m.pulseAmp * sin(t * m.pulseFreq)
-        for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse }
-        for i in frame.lines.indices { frame.lines[i].w *= m.scale }
+        // Attention-Pulse pustet den Orb zusätzlich kurz auf (~7%) — der
+        // reine Glow war zu dezent (User: „kaum bemerkt“).
+        let attEnv = attentionEnv()
+        let attScale = 1 + 0.07 * attEnv
+        for i in frame.dots.indices { frame.dots[i].r *= m.scale * pulse * attScale }
+        for i in frame.lines.indices { frame.lines[i].w *= m.scale * attScale }
 
         // Attention-Halo VOR den Partikeln (hinter dem Orb) — leuchtet durch
         // die Punktewolke hindurch, ohne sie zu übermalen.
         if attentionT < 1 {
-            drawAttentionGlow(ctx, size: size, m: m)
+            drawAttentionGlow(ctx, size: size, m: m, env: attEnv)
         }
 
         if transitionT < 1 {
