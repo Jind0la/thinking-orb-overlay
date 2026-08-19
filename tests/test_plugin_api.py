@@ -319,6 +319,14 @@ def test_report_nonpositive_attention_ignored():
         assert plugin_api._state["attention"] == 0
 
 
+def test_report_bool_attention_ignored():
+    """bool ist kein attention-Signal (Review-Minor #5) — True ist
+    int-Subclass und würde sonst als 1 durchrutschen."""
+    client.post("/report", json={"state": "breathing", "seq": 1, "attention": True})
+    with plugin_api._lock:
+        assert plugin_api._state["attention"] == 0
+
+
 def test_stale_report_does_not_touch_attention():
     """Out-of-Order-Report (503) darf attention nicht überschreiben."""
     client.post("/report", json={"state": "breathing", "seq": 10, "attention": 99})

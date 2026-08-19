@@ -184,6 +184,8 @@ async def report(request: Request):
         # Werte übernehmen. Heartbeat-/State-Reports ohne attention lassen den
         # letzten Wert bestehen — die App pulst nur bei Änderung.
         att = data.get("attention")
-        if isinstance(att, (int, float)) and att > 0:
+        # bool ist kein Signal (Review-Minor #5): True ist int-Subclass,
+        # würde sonst als 1 durchrutschen.
+        if isinstance(att, (int, float)) and not isinstance(att, bool) and att > 0:
             _state["attention"] = att
     return {"ok": True}

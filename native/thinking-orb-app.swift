@@ -711,8 +711,10 @@ final class OrbView: NSView {
         let env = signalActive ? attentionEnv() : 0
         // Farben blenden WEICH ein (erste 30% der Dauer): Mood-Farbe →
         // Regenbogen gleiten, statt hart zu springen (User: „Farben zu
-        // intensiv aufeinmal“).
-        let colorMix = signalActive ? smoothStep(min(1, attentionT / 0.3)) : 0
+        // intensiv aufeinmal“). Zusätzlich env-Kopplung (×3, gedeckelt):
+        // am Signal-Ende blendet der Regenbogen weich zurück, statt hart
+        // zu schneiden (Review-Minor #1).
+        let colorMix = signalActive ? smoothStep(min(1, attentionT / 0.3)) * min(1, env * 3) : 0
         if transitionT < 1 {
             let ease = smoothStep(transitionT)
             // Alte Linien blenden aus, neue ein
@@ -747,7 +749,18 @@ final class OrbView: NSView {
                 paint(ctx, morphed, appearance, m: m)
             }
         } else {
-            if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance, m: m) }
+            if !frame.lines.isEmpty {
+                // Linien im Signal mit dem gleichen Farbumlauf (Winkel aus
+                // dem Linien-Mittelpunkt) — Review-Minor #3. Nur der
+                // web/connecting-Mode hat Linien.
+                if signalActive && env > 0.001 {
+                    for l in frame.lines {
+                        paintSignalLine(ctx, l, appearance, m: m, rot: rot, env: env, colorMix: colorMix, cx: cx, cy: cy)
+                    }
+                } else {
+                    paintLines(ctx, frame.lines, appearance, m: m)
+                }
+            }
             if signalActive && env > 0.001 {
                 paintSignal(ctx, frame.dots, appearance, m: m, rot: rot, env: env, colorMix: colorMix, cx: cx, cy: cy)
             } else {
@@ -769,6 +782,23 @@ final class OrbView: NSView {
         ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
         ctx.strokePath()
     }
+    /// Linie im Atem-Signal: gleicher Farbumlauf wie paintSignal, Winkel
+    /// aus dem Linien-Mittelpunkt (Review-Minor #3).
+    private func paintSignalLine(_ ctx: CGContext, _ l: Line, _ dark: Bool, m: MoodSpec, rot: Double, env: Double, colorMix: Double, cx: Double, cy: Double) {
+        let w = min(1, max(0, l.white))
+        let ang = atan2((l.y1 + l.y2) / 2 - cy, (l.x1 + l.x2) / 2 - cx) - rot
+        var hn = ((ang / (2 * Double.pi)) + 0.5).truncatingRemainder(dividingBy: 1)
+        if hn < 0 { hn += 1 }
+        let hueP = lerpHue(m.hue, hn * 360, colorMix)
+        let satP = min(1, m.sat + 0.15 * colorMix)
+        let b = min(1, (dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w) + 0.12 * env * colorMix)
+        ctx.setStrokeColor(NSColor(hue: hueP / 360, saturation: satP, brightness: b, alpha: l.a).cgColor)
+        ctx.setLineWidth(CGFloat(l.w))
+        ctx.move(to: CGPoint(x: l.x1, y: l.y1))
+        ctx.addLine(to: CGPoint(x: l.x2, y: l.y2))
+        ctx.strokePath()
+    }
+
     private func paint(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool, m: MoodSpec) {
         for d in dots {
             let alpha = d.a
