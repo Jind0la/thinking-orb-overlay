@@ -638,18 +638,21 @@ final class OrbView: NSView {
 
     /// Partikel mit Atem-Signal: der Farbverlauf wandert einmal im
     /// Uhrzeigersinn um den Orb (alle Farben, rot = p·2π) und die
-    /// Partikel leuchten dabei heller auf (+0.18·env). NSColor(hue:)
-    /// erwartet 0-1, nicht Grad (orb-mood-Pitfall).
-    private func paintSignal(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool, m: MoodSpec, rot: Double, env: Double, cx: Double, cy: Double) {
+    /// Partikel leuchten dabei heller auf. colorMix blendet die Farben
+    /// weich ein (Mood-Farbe → Regenbogen) — User: „Farben zu intensiv
+    /// aufeinmal“, daher Sättigung +0.15 und Boost nur 0.12, beide mit
+    /// colorMix gewichtet. NSColor(hue:) erwartet 0-1, nicht Grad.
+    private func paintSignal(_ ctx: CGContext, _ dots: [Dot], _ dark: Bool, m: MoodSpec, rot: Double, env: Double, colorMix: Double, cx: Double, cy: Double) {
         for d in dots {
             let w = min(1, max(0, d.white))
             let dx = d.x - cx, dy = d.y - cy
             let ang = atan2(dy, dx) - rot
             var hn = ((ang / (2 * Double.pi)) + 0.5).truncatingRemainder(dividingBy: 1)
             if hn < 0 { hn += 1 }
-            let hueP = hn * 360
-            let satP = min(1, m.sat + 0.2)
-            let b = min(1, (dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w) + 0.18 * env)
+            let rainbowHue = hn * 360
+            let hueP = lerpHue(m.hue, rainbowHue, colorMix)
+            let satP = min(1, m.sat + 0.15 * colorMix)
+            let b = min(1, (dark ? 0.4 + 0.6 * (1 - w) : 0.3 + 0.7 * w) + 0.12 * env * colorMix)
             ctx.setFillColor(NSColor(hue: hueP / 360, saturation: satP, brightness: b, alpha: d.a).cgColor)
             ctx.fillEllipse(in: CGRect(x: d.x - d.r, y: d.y - d.r, width: d.r * 2, height: d.r * 2))
         }
@@ -706,6 +709,10 @@ final class OrbView: NSView {
 
         let signalActive = attentionT < 1
         let env = signalActive ? attentionEnv() : 0
+        // Farben blenden WEICH ein (erste 30% der Dauer): Mood-Farbe →
+        // Regenbogen gleiten, statt hart zu springen (User: „Farben zu
+        // intensiv aufeinmal“).
+        let colorMix = signalActive ? smoothStep(min(1, attentionT / 0.3)) : 0
         if transitionT < 1 {
             let ease = smoothStep(transitionT)
             // Alte Linien blenden aus, neue ein
@@ -735,14 +742,14 @@ final class OrbView: NSView {
                                    a: lerp(from.a, d.a, ease)))
             }
             if signalActive && env > 0.001 {
-                paintSignal(ctx, morphed, appearance, m: m, rot: rot, env: env, cx: cx, cy: cy)
+                paintSignal(ctx, morphed, appearance, m: m, rot: rot, env: env, colorMix: colorMix, cx: cx, cy: cy)
             } else {
                 paint(ctx, morphed, appearance, m: m)
             }
         } else {
             if !frame.lines.isEmpty { paintLines(ctx, frame.lines, appearance, m: m) }
             if signalActive && env > 0.001 {
-                paintSignal(ctx, frame.dots, appearance, m: m, rot: rot, env: env, cx: cx, cy: cy)
+                paintSignal(ctx, frame.dots, appearance, m: m, rot: rot, env: env, colorMix: colorMix, cx: cx, cy: cy)
             } else {
                 paint(ctx, frame.dots, appearance, m: m)
             }
