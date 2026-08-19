@@ -494,7 +494,9 @@ let _seq = Date.now() % 1000000000
 // Live-Phasen aus Gateway-Events: macht searching/solving/composing/listening
 // automatisch erreichbar, nicht nur working/breathing. Events sind global
 // (nicht session-gefiltert) — für den Einzel-Chat-Betrieb präzise genug.
-const phaseState = { tools: 0, reasoning: false, streaming: false, waiting: false }
+// answerDone: Timestamp der letzten abgeschlossenen Assistant-Message —
+// das „Antwort final geschrieben“-Signal für den Attention-Pulse des Orbs.
+const phaseState = { tools: 0, reasoning: false, streaming: false, waiting: false, answerDone: 0 }
 
 function onGatewayEvent(e) {
   const t = e && e.type
@@ -502,7 +504,7 @@ function onGatewayEvent(e) {
   else if (t === 'tool.complete') phaseState.tools = Math.max(0, phaseState.tools - 1)
   else if (t === 'reasoning.delta' || t === 'thinking.delta') { phaseState.reasoning = true; phaseState.waiting = false }
   else if (t === 'message.delta' || t === 'message.interim') { phaseState.streaming = true; phaseState.reasoning = false }
-  else if (t === 'message.complete') { phaseState.streaming = false; phaseState.reasoning = false; phaseState.tools = 0 }
+  else if (t === 'message.complete') { phaseState.streaming = false; phaseState.reasoning = false; phaseState.tools = 0; phaseState.answerDone = Date.now() }
   else if (t === 'clarify.request' || t === 'approval.request' || t === 'sudo.request' || t === 'secret.request') phaseState.waiting = true
 }
 
@@ -542,7 +544,16 @@ function OrbChip() {
   const report = () => {
     const state = deriveState(gateway, busy, awaiting, phaseState)
     const seq = ++_seq
-    _ctx?.rest('/report', { method: 'POST', body: { state, seq } }).catch(() => {})
+    const body = { state, seq }
+    // Attention: genau der Report, der die fertige Antwort begleitet, trägt
+    // den Timestamp — einmalig, danach verbraucht. Heartbeat/State-Reports
+    // ohne attention lassen im Backend den letzten Wert bestehen; die App
+    // pulst nur bei Änderung (kein Doppel-Pulse).
+    if (phaseState.answerDone > 0) {
+      body.attention = phaseState.answerDone
+      phaseState.answerDone = 0
+    }
+    _ctx?.rest('/report', { method: 'POST', body }).catch(() => {})
   }
   useEffect(() => {
     report()
