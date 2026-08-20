@@ -1,9 +1,11 @@
 /* thinking-orb — live agent-status orb for the Hermes status bar.
  * Port of jakubantalik/thinking-orbs engine (MIT) — see NOTICE.
- * State from host.state + gateway events (busy/tools/reasoning/streaming). */
-import { jsx } from 'react/jsx-runtime'
+ * State from host.state + gateway events (busy/tools/reasoning/streaming).
+ * Chip-Toggle (2026-08-20): Power-Button startet/stoppt die native
+ * Orb-App über die Backend-Routen /app/status|/app/start|/app/stop. */
+import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { useValue, host } from '@hermes/plugin-sdk'
+import { useValue, host, useQuery, useMutation, useQueryClient, icons } from '@hermes/plugin-sdk'
 
 /* ================= engine (port of thinking-orbs) ================= */
 const lerp = (a, b, f) => a + (b - a) * f
@@ -522,12 +524,49 @@ function deriveState(gateway, busy, awaiting, phase) {
   return 'working'
 }
 
+// --- App-Toggle (Orb an/aus) — Agent-Screen-Muster: 5s-Polling auf
+// /app/status, Mutation liest den Status FRISCH (nie den gecachten Query —
+// sonst togglet ein veralteter Cache in die falsche Richtung).
+const ORB_APP_GREEN = '#16A34A'
+const ORB_APP_GRAY = 'var(--ui-text-tertiary)'
+
+function useOrbAppStatus() {
+  return useQuery({
+    queryKey: ['thinking-orb', 'app-status'],
+    queryFn: async () => {
+      if (!_ctx) throw new Error('thinking-orb api not ready')
+      return _ctx.rest('/app/status')
+    },
+    refetchInterval: 5000,
+    staleTime: 2000
+  })
+}
+
+function useOrbToggle() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      if (!_ctx) throw new Error('thinking-orb api not ready')
+      const s = await _ctx.rest('/app/status')
+      if (s && s.supported === false) {
+        throw new Error(s.error || 'Thinking Orb requires a local macOS backend')
+      }
+      return _ctx.rest(s && s.running ? '/app/stop' : '/app/start', { method: 'POST' })
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['thinking-orb', 'app-status'] })
+  })
+}
+
 function OrbChip() {
   const busy = useValue(host.state.busy)
   const awaiting = useValue(host.state.awaitingResponse)
   const gateway = useValue(host.state.gateway)
   const [phaseTick, setPhaseTick] = useState(0)
   const stateRef = useRef('breathing')
+  const app = useOrbAppStatus()
+  const toggle = useOrbToggle()
+  const orbSupported = !app.data || app.data.supported !== false
+  const orbRunning = !!(app.data && app.data.running)
 
   // Gateway-Events abonnieren → Phasen-State aktualisieren (Re-Render via Tick)
   useEffect(() => {
@@ -568,10 +607,28 @@ function OrbChip() {
 
   stateRef.current = deriveState(gateway, busy, awaiting, phaseState)
 
-  return jsx('button', {
-    style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 22, height: 22 },
-    'aria-label': 'Era status: ' + LABELS[stateRef.current],
-    children: jsx(OrbCanvas, { size: 22, stateRef: stateRef })
+  return jsxs('div', {
+    style: { display: 'flex', alignItems: 'center', gap: 3, height: 22 },
+    children: [
+      jsx('button', {
+        style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 22, height: 22 },
+        'aria-label': 'Era status: ' + LABELS[stateRef.current],
+        children: jsx(OrbCanvas, { size: 22, stateRef: stateRef })
+      }),
+      jsx('button', {
+        type: 'button',
+        disabled: !orbSupported || toggle.isPending,
+        style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 18, height: 22 },
+        onClick: () => { if (orbSupported && !toggle.isPending) toggle.mutate() },
+        'aria-label': orbSupported
+          ? (orbRunning ? 'Thinking Orb: on — click to stop' : 'Thinking Orb: off — click to start')
+          : 'Thinking Orb requires a local macOS backend',
+        children: jsx(icons.Power, {
+          size: 14,
+          style: { color: orbRunning && orbSupported ? ORB_APP_GREEN : ORB_APP_GRAY, transition: 'color 200ms' }
+        })
+      })
+    ]
   })
 }
 

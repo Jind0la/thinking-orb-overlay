@@ -28,11 +28,14 @@ calm zurück. Kein manuelles Zurücksetzen mehr nötig (vergessener Mood
 lügt nie dauerhaft).
 """
 import json
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
@@ -59,6 +62,33 @@ _MOOD_TIMEOUTS = {
     "aroused": 300,      # 5 min — Grund-Takt; lange Szenen nähren per Refresh
 }
 _PORT = 8799
+
+# --- App-Steuerung (Chip-Toggle: Orb an/aus, 2026-08-20) ---
+# Der Chip kann keine Prozesse starten (ctx.os hat kein exec) — der Toggle
+# läuft über diese Routen (Agent-Screen-Muster). pgrep/pkill strikt mit -x
+# auf den Binary-Namen, NIE -f (matcht sonst Editoren/Compiler, die die
+# Swift-Datei offen haben). Die Start-/Stop-Helfer sind bewusst dünn und
+# einzeln testbar — Tests mocken sie, damit der echte Orb des Users nie
+# durch eine Testsuite gekillt wird.
+_ORB_PROC = "thinking-orb-app"
+# Gleiche Konstante wie native/thinking-orb.sh — die Installation unter
+# ~/.hermes/thinking-orb/ ist fest (kein Repo-Pfad nötig).
+_ORB_BIN = Path.home() / ".hermes" / "thinking-orb" / "app" / "Thinking Orb.app" / "Contents" / "MacOS" / "thinking-orb-app"
+
+
+def _orb_running() -> bool:
+    return subprocess.run(["pgrep", "-x", _ORB_PROC], capture_output=True).returncode == 0
+
+
+def _orb_start() -> None:
+    # start_new_session=True: das Kind überlebt den serve-Prozess (sonst
+    # stirbt der Orb mit einem Desktop-App-Neustart der Electron-App).
+    subprocess.Popen([str(_ORB_BIN)], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _orb_stop() -> None:
+    subprocess.run(["pkill", "-x", _ORB_PROC], capture_output=True)
 
 _state = {"state": "breathing", "seq": 0, "mood": "calm", "mood_set_at": 0.0, "attention": 0}
 _lock = threading.Lock()
@@ -189,3 +219,37 @@ async def report(request: Request):
         if isinstance(att, (int, float)) and not isinstance(att, bool) and att > 0:
             _state["attention"] = att
     return {"ok": True}
+
+
+# --- Orb-App an/aus (Chip-Toggle, 2026-08-20) ---
+# Agent-Screen-Muster: /status-GET (pgrep) + idempotente POST-Routen.
+# supported=false auf Nicht-macOS → Chip disabled (kein toter Button).
+
+
+@router.get("/app/status")
+async def app_status():
+    if sys.platform != "darwin":
+        return {"supported": False, "running": False, "platform": sys.platform}
+    return {"supported": True, "running": _orb_running(), "platform": "darwin"}
+
+
+@router.post("/app/start")
+async def app_start():
+    if sys.platform != "darwin":
+        raise HTTPException(status_code=501, detail="requires macOS")
+    if _orb_running():
+        return {"ok": True, "running": True}  # idempotent — kein Doppel-Orb
+    if not _ORB_BIN.is_file():
+        raise HTTPException(status_code=500, detail="orb binary missing — ./native/build-app.sh ausführen")
+    _orb_start()
+    return {"ok": True, "running": _orb_running()}
+
+
+@router.post("/app/stop")
+async def app_stop():
+    if sys.platform != "darwin":
+        raise HTTPException(status_code=501, detail="requires macOS")
+    if not _orb_running():
+        return {"ok": True, "running": False}  # idempotent
+    _orb_stop()
+    return {"ok": True, "running": _orb_running()}

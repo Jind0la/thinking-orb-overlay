@@ -334,3 +334,98 @@ def test_stale_report_does_not_touch_attention():
     assert r.status_code == 503
     with plugin_api._lock:
         assert plugin_api._state["attention"] == 99
+
+
+# --- App-Toggle: Orb an/aus aus dem Chip (2026-08-20) ---
+# Die Start-/Stop-Helfer (_orb_running/_orb_start/_orb_stop) sind gemockt —
+# echte pgrep/pkill würden den laufenden Orb des Users killen bzw. wirklich
+# starten. Die Routen-Semantik (supported, Idempotenz, Fehlerpfade) wird
+# gegen die Mocks getestet; die Helfer selbst sind 1-Zeiler auf pgrep/pkill.
+
+
+def _fake_running(value):
+    return lambda: value
+
+
+class _FakeBin:
+    def __init__(self, exists):
+        self._exists = exists
+
+    def is_file(self):
+        return self._exists
+
+
+def test_app_status_on_darwin(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(True))
+    r = client.get("/app/status")
+    assert r.status_code == 200
+    assert r.json() == {"supported": True, "running": True, "platform": "darwin"}
+
+
+def test_app_status_off_darwin_unsupported(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    r = client.get("/app/status")
+    assert r.status_code == 200
+    assert r.json() == {"supported": False, "running": False, "platform": "linux"}
+
+
+def test_app_start_when_running_is_idempotent(monkeypatch):
+    """Läuft der Orb schon, darf /app/start keinen zweiten Prozess spawnen."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(True))
+    started = []
+    monkeypatch.setattr(plugin_api, "_orb_start", lambda: started.append(True))
+    r = client.post("/app/start")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "running": True}
+    assert started == []
+
+
+def test_app_start_launches_binary(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(False))
+    monkeypatch.setattr(plugin_api, "_ORB_BIN", _FakeBin(True))
+    started = []
+    monkeypatch.setattr(plugin_api, "_orb_start", lambda: started.append(True))
+    r = client.post("/app/start")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "running": False}
+    assert started == [True]
+
+
+def test_app_start_missing_binary_500(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(False))
+    monkeypatch.setattr(plugin_api, "_ORB_BIN", _FakeBin(False))
+    started = []
+    monkeypatch.setattr(plugin_api, "_orb_start", lambda: started.append(True))
+    r = client.post("/app/start")
+    assert r.status_code == 500
+    assert started == []  # ohne Binary wird nie gestartet
+
+
+def test_app_stop_only_when_running(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    stopped = []
+    monkeypatch.setattr(plugin_api, "_orb_stop", lambda: stopped.append(True))
+    # läuft → kill
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(True))
+    r = client.post("/app/stop")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "running": True}
+    assert stopped == [True]
+    # läuft nicht mehr → idempotent, kein zweiter kill
+    monkeypatch.setattr(plugin_api, "_orb_running", _fake_running(False))
+    r = client.post("/app/stop")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "running": False}
+    assert stopped == [True]
+
+
+def test_app_start_off_darwin_501(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    r = client.post("/app/start")
+    assert r.status_code == 501
+    r = client.post("/app/stop")
+    assert r.status_code == 501

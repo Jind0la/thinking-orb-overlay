@@ -1,6 +1,6 @@
 # 13-thinking-orb-overlay — WAR ROOM
 
-Stand: 2026-08-19 (Abend — Mood-Dimension + Attention-Pulse)
+Stand: 2026-08-20 (Chip-Toggle: Orb an/aus)
 
 ## Zweck
 
@@ -60,6 +60,19 @@ dich repräsentieren").
   (Grok-CLI 7× gescheitert, Nimar-OK); Minors #1/#3/#5 gefixt, #4
   dokumentiert. Cmd+Q der Desktop-App erledigt (Nimar), Backend-Kopie
   gespiegelt, main gepusht.
+- [x] **Chip-Toggle** (2026-08-20, User: „keinen Button um die Orb an und aus
+  zu schalten“): Power-Button neben dem Orb-Chip. Backend `/app/status`
+  (pgrep -x), `/app/start`/`/app/stop` (idempotent, start_new_session,
+  pkill -x — nie -f); Chip: useQuery 5s + useMutation mit FRISCH-Status
+  (Agent-Screen-Muster), icons.Power grün/grau. Tests 28 passed (7 neue),
+  ESM-Check grün, Kopien gespiegelt.
+
+## Erkenntnisse 2026-08-20 (Chip-Toggle)
+
+- `ctx.os` kann keine Prozesse — Toggle nur über Backend-Routen (Agent-Screen-
+  Muster 1:1); Helfer im Test mocken (echte pgrep/pkill killen den Orb!).
+- `Path` ist `__slots__` — `_ORB_BIN` selbst auf Fake patchen, nicht `is_file`.
+- Backend-Routen brauchen Cmd+Q (Discovery-Cache), der Chip ist Hot-Reload-fähig.
 
 ## Erkenntnisse 2026-08-19 (Build-Lauf)
 
