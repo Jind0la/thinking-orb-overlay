@@ -1,11 +1,12 @@
 /* thinking-orb — live agent-status orb for the Hermes status bar.
  * Port of jakubantalik/thinking-orbs engine (MIT) — see NOTICE.
  * State from host.state + gateway events (busy/tools/reasoning/streaming).
- * Chip-Toggle (2026-08-20): Power-Button startet/stoppt die native
- * Orb-App über die Backend-Routen /app/status|/app/start|/app/stop. */
-import { jsx, jsxs } from 'react/jsx-runtime'
+ * Chip-Toggle (2026-08-20): Klick auf den Orb-Chip selbst startet/stoppt
+ * die native Orb-App (Backend-Routen /app/status|/app/start|/app/stop);
+ * ist die App aus, ist der Chip gedimmt. */
+import { jsx } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { useValue, host, useQuery, useMutation, useQueryClient, icons } from '@hermes/plugin-sdk'
+import { useValue, host, useQuery, useMutation, useQueryClient } from '@hermes/plugin-sdk'
 
 /* ================= engine (port of thinking-orbs) ================= */
 const lerp = (a, b, f) => a + (b - a) * f
@@ -526,10 +527,8 @@ function deriveState(gateway, busy, awaiting, phase) {
 
 // --- App-Toggle (Orb an/aus) — Agent-Screen-Muster: 5s-Polling auf
 // /app/status, Mutation liest den Status FRISCH (nie den gecachten Query —
-// sonst togglet ein veralteter Cache in die falsche Richtung).
-const ORB_APP_GREEN = '#16A34A'
-const ORB_APP_GRAY = 'var(--ui-text-tertiary)'
-
+// sonst togglet ein veralteter Cache in die falsche Richtung). Der Orb-Chip
+// selbst ist der Button: Klick togglet die App, aus = gedimmt.
 function useOrbAppStatus() {
   return useQuery({
     queryKey: ['thinking-orb', 'app-status'],
@@ -607,28 +606,20 @@ function OrbChip() {
 
   stateRef.current = deriveState(gateway, busy, awaiting, phaseState)
 
-  return jsxs('div', {
-    style: { display: 'flex', alignItems: 'center', gap: 3, height: 22 },
-    children: [
-      jsx('button', {
-        style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 22, height: 22 },
-        'aria-label': 'Era status: ' + LABELS[stateRef.current],
-        children: jsx(OrbCanvas, { size: 22, stateRef: stateRef })
-      }),
-      jsx('button', {
-        type: 'button',
-        disabled: !orbSupported || toggle.isPending,
-        style: { display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', width: 18, height: 22 },
-        onClick: () => { if (orbSupported && !toggle.isPending) toggle.mutate() },
-        'aria-label': orbSupported
-          ? (orbRunning ? 'Thinking Orb: on — click to stop' : 'Thinking Orb: off — click to start')
-          : 'Thinking Orb requires a local macOS backend',
-        children: jsx(icons.Power, {
-          size: 14,
-          style: { color: orbRunning && orbSupported ? ORB_APP_GREEN : ORB_APP_GRAY, transition: 'color 200ms' }
-        })
-      })
-    ]
+  return jsx('button', {
+    type: 'button',
+    disabled: !orbSupported || toggle.isPending,
+    style: {
+      display: 'flex', alignItems: 'center', padding: 0, border: 'none',
+      background: 'transparent', cursor: 'pointer', width: 22, height: 22,
+      opacity: orbSupported && !orbRunning ? 0.45 : 1,
+      transition: 'opacity 200ms'
+    },
+    onClick: () => { if (orbSupported && !toggle.isPending) toggle.mutate() },
+    'aria-label': orbSupported
+      ? ('Era status: ' + LABELS[stateRef.current] + (orbRunning ? ' — orb on, click to hide' : ' — orb off, click to show'))
+      : 'Thinking Orb requires a local macOS backend',
+    children: jsx(OrbCanvas, { size: 22, stateRef: stateRef })
   })
 }
 

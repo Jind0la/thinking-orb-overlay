@@ -61,18 +61,21 @@ dich repräsentieren").
   dokumentiert. Cmd+Q der Desktop-App erledigt (Nimar), Backend-Kopie
   gespiegelt, main gepusht.
 - [x] **Chip-Toggle** (2026-08-20, User: „keinen Button um die Orb an und aus
-  zu schalten“): Power-Button neben dem Orb-Chip. Backend `/app/status`
-  (pgrep -x), `/app/start`/`/app/stop` (idempotent, start_new_session,
-  pkill -x — nie -f); Chip: useQuery 5s + useMutation mit FRISCH-Status
-  (Agent-Screen-Muster), icons.Power grün/grau. Tests 28 passed (7 neue),
-  ESM-Check grün, Kopien gespiegelt.
+  zu schalten“): **Der Orb-Chip selbst ist der Toggle** — Klick auf den Chip
+  startet/stoppt die native App (User-Korrektur: kein separater Power-Button).
+  App aus = Chip gedimmt (opacity 0.45). Backend `/app/status` (pgrep -x),
+  `/app/start`/`/app/stop` (idempotent, start_new_session, pkill -x — nie
+  -f); Chip: useQuery 5s + useMutation mit FRISCH-Status
+  (Agent-Screen-Muster). Tests 28 passed (7 neue), ESM-Check grün, Kopien
+  gespiegelt.
 
 ## Erkenntnisse 2026-08-20 (Chip-Toggle)
 
-- `ctx.os` kann keine Prozesse — Toggle nur über Backend-Routen (Agent-Screen-
-  Muster 1:1); Helfer im Test mocken (echte pgrep/pkill killen den Orb!).
-- `Path` ist `__slots__` — `_ORB_BIN` selbst auf Fake patchen, nicht `is_file`.
-- Backend-Routen brauchen Cmd+Q (Discovery-Cache), der Chip ist Hot-Reload-fähig.
+- Backend braucht Cmd+Q, Chip Hot-Reload-fähig; User will KEINEN Power-
+  Button — der Chip IST der Toggle (Dimmung, title nie). Path = `__slots__`:
+  `_ORB_BIN` selbst patchen, nicht is_file.
+- Loopback 8799 = nur /status+/mood; /app-Routen via Bridge (ctx.rest) —
+  curl 8799 404 = normal.
 
 ## Erkenntnisse 2026-08-19 (Build-Lauf)
 
@@ -120,14 +123,11 @@ dich repräsentieren").
 - App-Guard: Pulse nur wenn attention frisch (<8s) UND != letzter Wert —
   App-Start/Backend-Neustart lösen keinen Geister-Pulse aus.
 - Effekt (Glow-Lab-iteriert bis User-OK, „So übernehmen“): Atem-Kurve
-  rein -3.6×amp (46%) / raus +2.4×amp (136%) bei 15% Amplitude, Dauer
-  2,8s; Farbverlauf rotiert einmal im Uhrzeigersinn (hue = Winkel - p·2π,
-  Boost 0.12·env, Sättigung +0.15, Farben weich ein-/ausgeblendet via
-  colorMix + env-Kopplung — Minors #1/#3); Fenster 1.5× Orb mit
-  transparentem Rand (kein Box-Rand-Schnitt — live gebissen: „Ränder der
-  Box“ beim Glow). **Skalierung wirkt auf Position + Radius** (nur Radien
-  = unsichtbar, live gebissen: „Atem sehe ich garnicht“). Glow-Gradient
-  verworfen (User: „zu platt“ — no-filters-Prinzip des Orb-Entwicklers).
+  rein -3.6×amp / raus +2.4×amp bei 15% Amplitude, 2,8s; Farbverlauf rotiert
+  einmal (hue = Winkel - p·2π, Boost 0.12·env); Fenster 1.5× Orb mit
+  transparentem Rand („Ränder der Box“ live gebissen). **Skalierung wirkt auf
+  Position + Radius** (nur Radien = unsichtbar). Glow-Gradient verworfen
+  (User: „zu platt“ — no-filters-Prinzip).
 - Swift/CG-Pitfall: `ctx.save()`/`restore()` existieren nicht — es sind
   `saveGState()`/`restoreGState()` (Build-Fehler live gefixt).
 - `/status` liefert attention erst nach Cmd+Q (Discovery-Cache) — der
